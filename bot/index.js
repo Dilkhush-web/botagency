@@ -8,35 +8,44 @@ const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const qrcode = require('qrcode-terminal');
 
-// Global crash protectors
+// Global crash protectors (Navigation, GridFS & DNS drops ko absorb karenge)
 process.on('uncaughtException', (err) => {
-    const msg = err.message || '';
+    const msg = (err && err.message) ? err.message : String(err);
     if (
         msg.includes('File not found for id') ||
         msg.includes('getaddrinfo ENOTFOUND') ||
         msg.includes('MongoNetworkError') ||
-        msg.includes('timed out')
+        msg.includes('timed out') ||
+        msg.includes('Execution context was destroyed') ||
+        msg.includes('Protocol error') ||
+        msg.includes('ENOENT') ||
+        msg.includes('RemoteAuth')
     ) {
-        console.warn('⚠️ Network/DNS drop caught safely. Auto-reconnecting...');
+        console.warn('⚠️ Safe warning handled (Sync/Navigation/Network). Client running...');
         return;
     }
     console.error('⚠️ Uncaught Exception:', err);
 });
 
 process.on('unhandledRejection', (reason) => {
-    const msg = (reason && reason.message) ? reason.message : '';
+    const msg = (reason && reason.message) ? reason.message : String(reason);
     if (
         msg.includes('File not found for id') ||
         msg.includes('getaddrinfo ENOTFOUND') ||
-        msg.includes('MongoNetworkError')
+        msg.includes('MongoNetworkError') ||
+        msg.includes('timed out') ||
+        msg.includes('Execution context was destroyed') ||
+        msg.includes('Protocol error') ||
+        msg.includes('ENOENT') ||
+        msg.includes('RemoteAuth')
     ) {
-        console.warn('⚠️ Async Network drop handled safely.');
+        console.warn('⚠️ Async session/navigation update handled safely.');
         return;
     }
     console.error('⚠️ Unhandled Rejection:', reason);
 });
 
-// Environment check: Render par 'Production' ya 'Render' ID use hogi, Local par alag
+// Environment check: Render par 'Number_1_Render' use hoga, Local par 'Number_1_Local'
 const BOT_SESSION_ID = process.env.RENDER ? 'Number_1_Render' : (process.env.SESSION_CLIENT_ID || 'Number_1_Local');
 
 const authDir = path.join(__dirname, '.wwebjs_auth');
@@ -105,6 +114,10 @@ async function startBot() {
                 backupSyncIntervalMs: 120000,
                 dataPath: authDir
             }),
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+            },
             puppeteer: {
                 headless: true,
                 args: [
@@ -120,9 +133,8 @@ async function startBot() {
             }
         });
 
-        // Agar phone number se pair karna ho bina QR scan ke
         client.on('qr', async (qr) => {
-            const pairingNumber = process.env.PAIRING_NUMBER; // e.g., 917484983432
+            const pairingNumber = process.env.PAIRING_NUMBER;
             if (pairingNumber && typeof client.requestPairingCode === 'function') {
                 try {
                     const code = await client.requestPairingCode(pairingNumber.replace(/\D/g, ''));
@@ -131,7 +143,7 @@ async function startBot() {
                     console.log(`👉 Apne phone WhatsApp > Linked Devices > Link with phone number par jaakar yeh code enter karein!`);
                     console.log('==================================================\n');
                 } catch (e) {
-                    console.log('⚠️ Pairing code request error, fallback to QR:', e.message);
+                    console.log('⚠️ Pairing code request expired/error, fallback to QR:');
                     qrcode.generate(qr, { small: true });
                 }
             } else {
@@ -183,7 +195,7 @@ async function startBot() {
     }
 }
 
-// Keep-alive HTTP server for Render Web Service
+// Keep-alive HTTP server for Render Web Service Port Binding
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
