@@ -21,7 +21,7 @@ function getRandomGreeting(cleanName) {
     return greetings[Math.floor(Math.random() * greetings.length)];
 }
 
-// Deep Industry Intelligence & Specific Business Bottlenecks
+// Deep Industry Intelligence & Specific Business Bottlenecks (Har Niche ka Exact Data)
 function getNicheContext(niche = '') {
     const n = String(niche).toLowerCase();
 
@@ -97,10 +97,11 @@ function getNicheContext(niche = '') {
         };
     }
 
+    // 9. Universal / Any Random Niche Fallback
     return {
-        category: 'Business Operations',
-        painPoint: 'inflow of unqualified digital inquiries that fail to translate into high-ticket conversions',
-        solution: 'modern custom web platforms and automated client acquisition funnels built specifically for conversion'
+        category: niche || 'Business Operations',
+        painPoint: 'inflow of unqualified digital inquiries that fail to translate into high-ticket conversions and waste staff hours',
+        solution: 'modern custom web platforms, automated lead qualification funnels, and WhatsApp client onboarding systems built specifically for conversion'
     };
 }
 
@@ -113,7 +114,7 @@ Noticed your active presence in the ${ctx.category} space.
 
 A major recurring challenge we see businesses facing right now is ${ctx.painPoint}.
 
-At AUG Consultancy, we deploy ${ctx.solution}, so your core team only spends time on genuine, qualified prospects.
+At AUG Consultancy (AfterUs Global), we deploy ${ctx.solution}, so your core team only spends time on genuine, qualified prospects.
 
 Would you be open to a brief 2-minute quick connect sometime this week to see if this fits your current setup?
 
@@ -137,17 +138,17 @@ async function generateViaGroq(prompt) {
                 messages: [
                     { 
                         role: "system", 
-                        content: "You are an authentic, senior business consultant writing direct, natural B2B messages. Never sound like a generic bot or AI. Output clean, raw text only." 
+                        content: "You are an authentic, senior business consultant representing 'AUG Consultancy' (AfterUs Global - afterusglobal.com). You write direct, natural B2B messages. Never sound like a generic bot or AI. Output clean, raw text only." 
                     },
                     { role: "user", content: prompt }
                 ],
-                temperature: 0.65, // Higher entropy for varied, non-repetitive phrasing
-                max_tokens: 350
+                temperature: 0.70, // Balanced entropy for varied, non-repetitive phrasing
+                max_tokens: 380
             });
 
             if (completion && completion.choices[0]?.message?.content) {
                 let text = completion.choices[0].message.content.trim();
-                text = text.replace(/[*#]/g, '').replace(/^["']|["']$/g, '').trim();
+                text = text.replace(/[*#_]/g, '').replace(/^["']|["']$/g, '').trim();
                 if (text.length > 70) {
                     console.log(`✨ Groq Generation Successful! (Model: ${model})`);
                     return text;
@@ -166,7 +167,7 @@ async function generateViaGroq(prompt) {
 async function generateViaGemini(prompt) {
     if (!gemini) return null;
 
-    const geminiModels = ['gemini-3.8-flash'];
+    const geminiModels = ['gemini-2.5-flash'];
 
     for (const model of geminiModels) {
         try {
@@ -178,7 +179,7 @@ async function generateViaGemini(prompt) {
 
             if (response && response.text) {
                 let text = response.text.trim();
-                text = text.replace(/[*#]/g, '').replace(/^["']|["']$/g, '').trim();
+                text = text.replace(/[*#_]/g, '').replace(/^["']|["']$/g, '').trim();
                 if (text.length > 70) {
                     console.log(`✨ Gemini Failover Generation Successful! (Model: ${model})`);
                     return text;
@@ -202,7 +203,7 @@ async function generateMessage(name, niche, isReply = false, clientMessage = "",
     let prompt = "";
     if (isReply) {
         prompt = `
-You are the business representative at 'AUG Consultancy' (AfterUs Global).
+You are the business representative at 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
 Client: ${name} (Industry: ${niche})
 Client's incoming message: "${clientMessage}"
 
@@ -214,30 +215,37 @@ INBOUND RULES:
 3. If technical or custom pricing questions arise, state:
    "I will verify the exact scope with our core technical team and get back to you shortly."
 4. If they show interest, propose a brief 5-minute introductory call or Google Meet.
-5. Plain text only. No quotes, no markdown symbols.
+5. Plain text only. No quotes, no markdown symbols (*, #, _).
 6. Signature MUST be:
 Regards,
 Team, AUG Consultancy
 `;
     } else {
         prompt = `
-Write a sharp, natural, and highly personalized B2B cold outreach WhatsApp message for AUG Consultancy.
+Write a sharp, natural, and highly personalized B2B cold outreach WhatsApp message for 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
 
+RECIPIENT & CONTEXT:
 Recipient: ${cleanName}
-Niche: ${ctx.category}
-Identified Bottleneck: ${ctx.painPoint}
+Niche / Target Industry: ${ctx.category}
+Identified Bottleneck / Friction: ${ctx.painPoint}
 Our Concrete Solution: ${ctx.solution}
+
+OUR CORE SERVICES AT AFTERUS GLOBAL (afterusglobal.com):
+- Custom high-speed Web & App Development (React, Next.js).
+- Interactive Client-Qualification Funnels & Calculators.
+- Autonomous 24/7 WhatsApp AI Chatbots & Lead Filtration Systems.
+- Paid Acquisition Architecture (Meta/Google Ads + High-converting landing pages).
 
 MANDATORY ANTI-BOT INSTRUCTIONS:
 1. GREETING: Start EXACTLY with this line: "${chosenGreeting}" (Do NOT invent your own greeting).
-2. NO ROBOTIC CLICHÉS: Strictly NEVER use phrases like "speaking as a founder", "as a founder", "I am reaching out to you", "hope this email finds you well", "in today's fast-paced world", or "game-changer".
-3. VARIED PHRASING: Do not write like a templated sales script. Write like an observant tech consultant who genuinely understands how the ${ctx.category} business operates. Talk naturally about how ${ctx.painPoint} can be tackled using ${ctx.solution}.
+2. NO ROBOTIC CLICHÉS: Strictly NEVER use phrases like "speaking as a founder", "as a founder", "I am reaching out to you", "hope this email finds you well", "in today's fast-paced world", "game-changer", or "revolutionize".
+3. VARIED & OBSERVANT PHRASING: Do not write like a templated sales script. Write like an observant tech consultant who genuinely understands how the ${ctx.category} business operates. Address how ${ctx.painPoint} is actively draining their team's bandwidth and how ${ctx.solution} fixes it.
 4. LENGTH: 4 to 6 concise, well-spaced lines. Natural line breaks.
 5. LANGUAGE: Plain, sharp corporate English.
-6. FORBIDDEN WORDS: Never use 'Free', '100% Guarantee', 'Cheap', 'Discount', 'Best Price', 'Offer', 'Revolutionary'.
+6. FORBIDDEN WORDS: Never use 'Free', '100% Guarantee', 'Cheap', 'Discount', 'Best Price', 'Offer', 'Revolutionary', 'Skyrocket'.
 7. FORMATTING: Raw text only. DO NOT include quotes (""), asterisks (*), hashtags (#), or subject headers.
 8. ENDING: Conclude naturally with:
-"Would you be open to a brief 2-minute quick connect sometime this week?"
+Would you be open to a brief 2-minute quick connect sometime this week?
 
 Regards,
 Team, AUG Consultancy
@@ -253,7 +261,7 @@ Team, AUG Consultancy
     if (geminiResult) return geminiResult;
 
     // Step 3: Guaranteed Human Fallback
-    console.log(`🛡️ Deep fallback template active for ${cleanName}`);
+    console.log(`🛡️ Deep fallback template active for ${cleanName} (${ctx.category})`);
     return getDeepFallback(cleanName, ctx);
 }
 

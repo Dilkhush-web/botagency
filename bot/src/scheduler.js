@@ -13,11 +13,11 @@ function getTodayISTDate() {
     }).format(new Date());
 }
 
-// कैंपेन शुरू होने की तारीख (YYYY-MM-DD)
+// Campaign start date (YYYY-MM-DD)
 const CAMPAIGN_START_DATE = '2026-10-14';
 
 /**
- * डायनामिक वार्मअप लिमिट कैलकुलेटर:
+ * Dynamic Warmup Limit Calculator:
  * Day 1-3:  15/day
  * Day 4-6:  25/day
  * Day 7-9:  35/day
@@ -44,25 +44,24 @@ function getDailyOutreachLimit() {
 }
 
 /**
- * 3 स्लॉट्स में प्रति स्लॉट बैच साइज निकालना
+ * 3 Slots mein batch size calculate karna
  */
 function getSlotBatchSize(slotIndex) {
     const { dayNumber, dailyTotal } = getDailyOutreachLimit();
-    // 3 स्लॉट्स में डिस्ट्रीब्यूशन
     const base = Math.floor(dailyTotal / 3);
     const remainder = dailyTotal % 3;
 
-    // अगर शेष बचता है तो पहले स्लॉट्स में 1-1 जोड़ देगा
+    // Remaining leads distribute karna
     const batchSize = slotIndex < remainder ? base + 1 : base;
     return { dayNumber, dailyTotal, batchSize };
 }
 
-// 0 से 30 मिनट का नैचुरल ह्यूमन जिटर डिले (Meta Anti-Ban)
+// 0 se 30 minute ka natural human jitter delay (Meta Anti-Ban)
 function getRandomStartDelay() {
     return Math.floor(Math.random() * 30) * 60 * 1000;
 }
 
-// Concurrency guard ताकि स्लॉट्स आपस में क्लैश न हों
+// Concurrency guard taaki slots clash na karein
 let isSlotRunning = false;
 
 function startDailyCron(whatsappClient) {
@@ -103,14 +102,14 @@ function startDailyCron(whatsappClient) {
 async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = true) {
     try {
         const today = new Date();
-        // Sunday Off नियम
+        // Sunday Off rule
         if (today.getDay() === 0) {
-            console.log(`\n🛑 [${slotName}]: आज रविवार (Sunday) है! Outreach पूरी तरह बंद है।\n`);
+            console.log(`\n🛑 [${slotName}]: Aaj Sunday hai! Outreach schedule off hai.\n`);
             return;
         }
 
         if (isSlotRunning) {
-            console.log(`⚠️ [${slotName}]: पिछला स्लॉट अभी रन हो रहा है, ओवरलैप रोकने के लिए स्किप किया गया।`);
+            console.log(`⚠️ [${slotName}]: Pichla task abhi complete nahi hua hai, overlapping prevent karne ke liye skip kiya.`);
             return;
         }
 
@@ -119,12 +118,12 @@ async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = 
         const delayMins = (delayMs / 60000).toFixed(1);
 
         console.log(`\n🕒 [${slotName}] Triggered on ${getTodayISTDate()}`);
-        console.log(`📊 Warmup Day ${dayNumber}: आज का कुल कोटा ${dailyTotal} है। इस स्लॉट में ${batchSize} मैसेज भेजे जाएंगे।`);
+        console.log(`📊 Warmup Day ${dayNumber}: Aaj ka total quota ${dailyTotal} leads hai. Is slot mein ${batchSize} messages bheje jayenge.`);
 
         if (delayMs > 0) {
-            console.log(`⏳ Anti-Ban: Natural human delay (${delayMins} mins) के बाद शुरू होगा...`);
+            console.log(`⏳ Anti-Ban: Natural human delay (${delayMins} mins) ke baad execution start hoga...`);
         } else {
-            console.log(`⚡ Instant Run: बिना डिले के तुरंत शुरू हो रहा है...`);
+            console.log(`⚡ Instant Run: Execution shuru ho raha hai bina kisi delay ke...`);
         }
 
         setTimeout(async () => {
@@ -132,14 +131,14 @@ async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = 
             console.log(`\n🚀 [${slotName}] Execution Started!`);
 
             try {
-                // 1. Pending outreach leads को उठाना
+                // 1. Pending outreach leads fetch karna
                 const leads = await getPendingLeads();
                 if (leads && leads.length > 0) {
-                    console.log(`📋 Available Pending Leads: ${leads.length}. Processing ${Math.min(leads.length, batchSize)} leads...`);
-                    // सुरक्षित बैच साइज के साथ मैसेज भेजना
-                    await sendOutreachMessages(whatsappClient, leads, batchSize);
+                    const actualBatch = Math.min(leads.length, batchSize);
+                    console.log(`📋 Available Pending Leads: ${leads.length}. Processing ${actualBatch} leads...`);
+                    await sendOutreachMessages(whatsappClient, leads, actualBatch);
                 } else {
-                    console.log(`ℹ️ [${slotName}]: Google Sheet में कोई 'Pending' leads नहीं मिलीं।`);
+                    console.log(`ℹ️ [${slotName}]: Google Sheet mein koi 'Pending' leads nahi mili.`);
                 }
 
                 // 2. Multi-day auto follow-up (Day 3, 7, 14, 21)
@@ -153,7 +152,7 @@ async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = 
                 console.error(`❌ Critical error in slot execution (${slotName}):`, error.message || error);
             } finally {
                 isSlotRunning = false;
-                console.log(`\n✨ [${slotName}] स्लॉट के कार्य पूरे हुए। बॉट अगले स्लॉट के लिए स्टैंडबाय पर है।\n`);
+                console.log(`\n✨ [${slotName}] Slot tasks complete ho gaye. Bot agle slot ke liye standby mode par hai.\n`);
             }
 
         }, delayMs);

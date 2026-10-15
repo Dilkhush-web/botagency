@@ -21,7 +21,7 @@ process.on('uncaughtException', (err) => {
         msg.includes('ENOENT') ||
         msg.includes('RemoteAuth')
     ) {
-        console.warn('⚠️ Safe warning handled (Sync/Navigation/Network). Client running...');
+        console.warn('⚠️ Safe warning handled (Sync/Navigation/Network). Client continuing smoothly...');
         return;
     }
     console.error('⚠️ Uncaught Exception:', err);
@@ -45,8 +45,8 @@ process.on('unhandledRejection', (reason) => {
     console.error('⚠️ Unhandled Rejection:', reason);
 });
 
-// Environment check: Render par 'Number_1_Render' use hoga, Local par 'Number_1_Local'
-const BOT_SESSION_ID = process.env.RENDER ? 'Number_1_Render' : (process.env.SESSION_CLIENT_ID || 'Number_1_Local');
+// Single Permanent Session ID across Local and Render (Unified Lock)
+const BOT_SESSION_ID = process.env.SESSION_CLIENT_ID || 'AUG_CORE_SESSION';
 
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
@@ -57,7 +57,7 @@ if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 const cacheDir = path.join(__dirname, '.wwebjs_cache');
 if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
-console.log(`🚀 AUG Master Bot Initializing [Session: ${BOT_SESSION_ID}]...`);
+console.log(`🚀 AUG Master Bot Initializing [Permanent Session: ${BOT_SESSION_ID}]...`);
 
 async function connectWithRetry(maxWaitMinutes = 15) {
     const intervalMs = 30000;
@@ -103,7 +103,7 @@ async function startBot() {
                     console.log('ℹ️ Session ID overwrite handled safely.');
                     return;
                 }
-                console.warn('⚠️ Session save warning:', err.message);
+                console.warn('⚠️ Session save warning handled:', err.message);
             }
         };
 
@@ -111,7 +111,7 @@ async function startBot() {
             authStrategy: new RemoteAuth({
                 clientId: BOT_SESSION_ID,
                 store: store,
-                backupSyncIntervalMs: 120000,
+                backupSyncIntervalMs: 300000, // 5 min interval to reduce GridFS lock & disk churn
                 dataPath: authDir
             }),
             webVersionCache: {
@@ -128,7 +128,14 @@ async function startBot() {
                     '--no-first-run',
                     '--no-zygote',
                     '--single-process',
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--disable-extensions',
+                    '--js-flags="--max-old-space-size=180"', // Caps Node/V8 RAM usage to 180MB for Render Free Tier
+                    '--disable-default-apps',
+                    '--mute-audio',
+                    '--disable-component-update',
+                    '--disable-features=Translate,OptimizationHints,MediaRouter',
+                    '--blink-settings=imagesEnabled=false' // Disables image loading to save massive RAM
                 ]
             }
         });
@@ -143,7 +150,7 @@ async function startBot() {
                     console.log(`👉 Apne phone WhatsApp > Linked Devices > Link with phone number par jaakar yeh code enter karein!`);
                     console.log('==================================================\n');
                 } catch (e) {
-                    console.log('⚠️ Pairing code request expired/error, fallback to QR:');
+                    console.log('⚠️ Pairing code request error, fallback to QR:');
                     qrcode.generate(qr, { small: true });
                 }
             } else {
@@ -161,7 +168,7 @@ async function startBot() {
             }
             isReadyInitialized = true;
 
-            console.log(`\n✅ SUCCESS: WhatsApp Client is READY! (${BOT_SESSION_ID} connected)\n`);
+            console.log(`\n✅ SUCCESS: WhatsApp Client is READY! (${BOT_SESSION_ID} permanently connected)\n`);
             console.log('==================================================');
             console.log('🤖 AUG BOT IS LIVE & READY FOR ACTION!');
             console.log('==================================================\n');
