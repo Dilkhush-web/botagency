@@ -121,22 +121,29 @@ async function startBot() {
             puppeteer: {
                 headless: true,
                 args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--single-process',
-                    '--disable-gpu',
-                    '--disable-extensions',
-                    '--js-flags="--max-old-space-size=180"', // Caps Node/V8 RAM usage to 180MB for Render Free Tier
-                    '--disable-default-apps',
-                    '--mute-audio',
-                    '--disable-component-update',
-                    '--disable-features=Translate,OptimizationHints,MediaRouter',
-                    '--blink-settings=imagesEnabled=false' // Disables image loading to save massive RAM
-                ]
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--disable-component-update',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-client-side-phishing-detection',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--no-default-browser-check',
+        '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider',
+        '--blink-settings=imagesEnabled=false',
+        '--js-flags=--max-old-space-size=200'  ]
             }
         });
 
