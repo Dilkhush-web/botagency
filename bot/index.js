@@ -2,7 +2,7 @@
 require('dotenv').config();
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
+const path = path = require('path');
 const { execSync } = require('child_process');
 const mongoose = require('mongoose');
 const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -37,24 +37,29 @@ process.on('unhandledRejection', (reason) => {
     console.error('⚠️ Unhandled Rejection:', reason);
 });
 
-// Mounted volume directory (/app/.wwebjs_auth)
+// Mounted Volume Directory (Railway Mount Path: /app/.wwebjs_auth)
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-// ROOT FIX: Chromium lock removal directly via shell on startup
-function unlockBrowserProfile() {
+// 🛡️ ULTRA-BULLETPROOF LOCK KILLER (Linux Shell Level)
+// Yeh function container start hote hi saare purane locks, sockets aur symlinks ko zameen se ukhad kar fenk dega.
+function purgeAllChromiumLocks() {
     try {
-        // Kill any existing browser process
-        try { execSync('pkill -9 -f "(chrome|chromium)" 2>/dev/null || true'); } catch (e) {}
-
-        // Remove Singleton symlinks across the entire system volume and /tmp
-        execSync('rm -rf /tmp/.*Singleton* /tmp/*Singleton* 2>/dev/null || true');
-        execSync(`find "${authDir}" -type l -name "*Singleton*" -delete 2>/dev/null || true`);
-        execSync(`find "${authDir}" -type f -name "*Singleton*" -delete 2>/dev/null || true`);
-        execSync(`find "${authDir}" -type s -name "*Singleton*" -delete 2>/dev/null || true`);
-        console.log('🧹 Chromium Singleton locks completely purged.');
+        console.log('🧹 Scanning and destroying stale Chromium locks...');
+        // 1. Kill any zombie chrome process
+        execSync('pkill -9 -f "(chrome|chromium)" 2>/dev/null || true');
+        
+        // 2. Force delete all Singleton files, lock symlinks, and sockets inside the auth volume
+        execSync(`find "${authDir}" -name "*Singleton*" -delete 2>/dev/null || true`);
+        execSync(`find "${authDir}" -name "SingletonLock" -delete 2>/dev/null || true`);
+        execSync(`find "${authDir}" -name "SingletonSocket" -delete 2>/dev/null || true`);
+        execSync(`find "${authDir}" -name "SingletonCookie" -delete 2>/dev/null || true`);
+        
+        // 3. Clean any lingering locks in system temp
+        execSync('rm -rf /tmp/.X*-lock /tmp/.lock /tmp/*Singleton* 2>/dev/null || true');
+        console.log('✨ All browser locks successfully purged.');
     } catch (err) {
-        console.warn('⚠️ Lock purge warning:', err.message);
+        console.warn('⚠️ Lock purge note:', err.message);
     }
 }
 
@@ -79,8 +84,8 @@ async function startBot() {
     try {
         await connectDatabase();
 
-        // Browser initiate karne se theek pehle system level lock unlock karo
-        unlockBrowserProfile();
+        // 🚀 Browser start hone se theek 1 second pehle saare locks saaf karo
+        purgeAllChromiumLocks();
 
         const client = new Client({
             authStrategy: new LocalAuth({
@@ -89,7 +94,7 @@ async function startBot() {
             }),
             puppeteer: {
                 headless: true,
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/nix/var/nix/profiles/default/bin/chromium',
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -176,13 +181,13 @@ async function startBot() {
     }
 }
 
-// Keep-alive HTTP server for Railway
+// Keep-alive HTTP server for Railway Port Binding
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('AUG Consultancy Autonomous Bot Worker is Active\n');
 }).listen(PORT, () => {
-    console.log(`🌐 Server running on port ${PORT}`);
+    console.log(`🌐 Keep-alive server active on port ${PORT}`);
 });
 
 startBot();
