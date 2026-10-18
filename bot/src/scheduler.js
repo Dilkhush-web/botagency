@@ -14,14 +14,13 @@ function getTodayISTDate() {
 }
 
 // Campaign start date (YYYY-MM-DD)
-const CAMPAIGN_START_DATE = '2026-10-14';
+const CAMPAIGN_START_DATE = '2026-10-19';
 
 /**
  * Dynamic Warmup Limit Calculator:
- * Day 1-3:  15/day
- * Day 4-6:  25/day
- * Day 7-9:  35/day
- * Day 10+:  40/day
+ * Day 1-3:  25/day
+ * Day 4-6:  35/day
+ * Day 7+:   45/day (Full Scale)
  */
 function getDailyOutreachLimit() {
     const start = new Date(CAMPAIGN_START_DATE);
@@ -29,15 +28,13 @@ function getDailyOutreachLimit() {
     const diffTime = Math.max(0, today.getTime() - start.getTime());
     const dayNumber = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
 
-    let dailyTotal = 40;
+    let dailyTotal = 45;
     if (dayNumber <= 3) {
-        dailyTotal = 15;
-    } else if (dayNumber <= 6) {
         dailyTotal = 25;
-    } else if (dayNumber <= 9) {
+    } else if (dayNumber <= 6) {
         dailyTotal = 35;
     } else {
-        dailyTotal = 40;
+        dailyTotal = 45;
     }
 
     return { dayNumber, dailyTotal };
@@ -56,9 +53,9 @@ function getSlotBatchSize(slotIndex) {
     return { dayNumber, dailyTotal, batchSize };
 }
 
-// 0 se 30 minute ka natural human jitter delay (Meta Anti-Ban)
+// 0 se 20 minute ka natural human jitter delay (Meta Anti-Ban)
 function getRandomStartDelay() {
-    return Math.floor(Math.random() * 30) * 60 * 1000;
+    return Math.floor(Math.random() * 20) * 60 * 1000;
 }
 
 // Concurrency guard taaki slots clash na karein
@@ -71,7 +68,7 @@ function startDailyCron(whatsappClient) {
     console.log(`⏰ Production Scheduler Activated (AUG Consultancy)`);
     console.log(`📈 Warmup Stage: Day ${dayNumber} | Today's Target: ${dailyTotal} New Leads`);
     console.log(`Daily Slots: 10:00 AM | 02:00 PM | 06:00 PM (IST)`);
-    console.log(`Rules: Sunday Off | 0-30m Anti-Ban Jitter | Auto Follow-up`);
+    console.log(`Rules: Sunday Off | 0-20m Anti-Ban Jitter | Auto Follow-up`);
     console.log(`==================================================\n`);
 
     // Slot 1: Morning (10:00 AM IST) - slotIndex 0
@@ -118,7 +115,7 @@ async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = 
         const delayMins = (delayMs / 60000).toFixed(1);
 
         console.log(`\n🕒 [${slotName}] Triggered on ${getTodayISTDate()}`);
-        console.log(`📊 Warmup Day ${dayNumber}: Aaj ka total quota ${dailyTotal} leads hai. Is slot mein ${batchSize} messages bheje jayenge.`);
+        console.log(`📊 Warmup Day ${dayNumber}: Aaj ka total quota ${dailyTotal} leads hai. Is slot mein ${batchSize} messages process honge.`);
 
         if (delayMs > 0) {
             console.log(`⏳ Anti-Ban: Natural human delay (${delayMins} mins) ke baad execution start hoga...`);
@@ -135,13 +132,14 @@ async function executeSlot(whatsappClient, slotName, slotIndex = 0, withDelay = 
                 const leads = await getPendingLeads();
                 if (leads && leads.length > 0) {
                     const actualBatch = Math.min(leads.length, batchSize);
-                    console.log(`📋 Available Pending Leads: ${leads.length}. Processing ${actualBatch} leads...`);
+                    console.log(`📋 Available Pending Leads: ${leads.length}. Processing batch of ${actualBatch} leads...`);
                     await sendOutreachMessages(whatsappClient, leads, actualBatch);
                 } else {
                     console.log(`ℹ️ [${slotName}]: Google Sheet mein koi 'Pending' leads nahi mili.`);
                 }
 
                 // 2. Multi-day auto follow-up (Day 3, 7, 14, 21)
+                console.log(`🔎 Follow-up engine: Google Sheet check kar rahe hain...`);
                 try {
                     await processFollowups(whatsappClient);
                 } catch (followupErr) {

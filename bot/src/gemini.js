@@ -9,14 +9,25 @@ const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_
 // 2. Google Gemini Client (Failover)
 const gemini = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 
-// Dynamic Natural Human Greetings (Meta anti-pattern randomization)
-function getRandomGreeting(cleanName) {
+// Clean full business name without chopping words or leaving garbage
+function cleanBusinessName(rawName) {
+    if (!rawName) return 'there';
+    let cleaned = String(rawName)
+        .replace(/["'(){}[\]]/g, '')
+        .replace(/\b\d{10,12}\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return cleaned || 'there';
+}
+
+// 100% Natural, Human-like Consultant Openings (Strictly NO robotic clichés)
+function getHumanGreeting(businessName) {
     const greetings = [
-        `Hi ${cleanName},`,
-        `Hello ${cleanName},`,
-        `Hey ${cleanName}, hope you're having a productive week.`,
-        `Hi ${cleanName}, quick note regarding your projects:`,
-        `Hello ${cleanName}, reached out after noticing your active presence:`
+        `Hi ${businessName},`,
+        `Hello ${businessName},`,
+        `Hi ${businessName}, quick observation regarding your digital client flow:`,
+        `Hello to the team at ${businessName},`,
+        `Hi ${businessName}, came across your work recently:`
     ];
     return greetings[Math.floor(Math.random() * greetings.length)];
 }
@@ -25,7 +36,25 @@ function getRandomGreeting(cleanName) {
 function getNicheContext(niche = '') {
     const n = String(niche).toLowerCase();
 
-    // 1. Real Estate & Builders
+    // 1. Solar & Renewable Energy
+    if (n.includes('solar') || n.includes('energy') || n.includes('renewable')) {
+        return {
+            category: 'Solar Energy & EPC Solutions',
+            painPoint: 'sales bandwidth wasted answering leads who lack shadow-free rooftop ownership or sanction load clarity',
+            solution: 'interactive Solar Savings & Subsidy qualification calculators that filter out non-viable prospects before your engineering team steps in'
+        };
+    }
+
+    // 2. Doctors, Healthcare & Specialized Clinics
+    if (n.includes('dent') || n.includes('doctor') || n.includes('clinic') || n.includes('health') || n.includes('medical') || n.includes('hospital')) {
+        return {
+            category: 'Healthcare & Clinical Practice',
+            painPoint: 'high inquiry drop-offs and patient no-shows caused by delayed manual chat responses and friction in booking consultations',
+            solution: 'instant WhatsApp patient triage and automated appointment booking systems that secure consultations directly on calendar'
+        };
+    }
+
+    // 3. Real Estate, Builders & Developers
     if (n.includes('real estate') || n.includes('property') || n.includes('builder') || n.includes('developer')) {
         return {
             category: 'Real Estate & Property Development',
@@ -34,16 +63,7 @@ function getNicheContext(niche = '') {
         };
     }
 
-    // 2. Doctors, Dental & Healthcare Clinics
-    if (n.includes('dent') || n.includes('doctor') || n.includes('clinic') || n.includes('health') || n.includes('medical') || n.includes('hospital')) {
-        return {
-            category: 'Healthcare & Clinical Practice',
-            painPoint: 'prospective patients researching treatments online but dropping off due to delayed manual booking confirmations',
-            solution: 'verified digital clinical profiles paired with automated 24/7 WhatsApp consultation scheduling flows'
-        };
-    }
-
-    // 3. Interior Designers & Architects
+    // 4. Interior Designers & Architects
     if (n.includes('interior') || n.includes('architect') || n.includes('decor')) {
         return {
             category: 'Interior Design & Architecture',
@@ -52,7 +72,7 @@ function getNicheContext(niche = '') {
         };
     }
 
-    // 4. Photography & Videography Studios
+    // 5. Photography & Videography Studios
     if (n.includes('photo') || n.includes('video') || n.includes('studio') || n.includes('wedding')) {
         return {
             category: 'Photography & Creative Studios',
@@ -61,21 +81,12 @@ function getNicheContext(niche = '') {
         };
     }
 
-    // 5. Pre-Owned Vehicles / Auto Dealerships
+    // 6. Pre-Owned Vehicles / Auto Dealerships
     if (n.includes('vehicle') || n.includes('car') || n.includes('auto') || n.includes('dealer') || n.includes('used') || n.includes('pre-owned')) {
         return {
             category: 'Automobile Dealership & Pre-Owned Vehicles',
             painPoint: 'stagnant showroom visits despite steady online clicks and struggling to commit buyers to actual test drives',
             solution: 'digital inventory catalog funnels integrated with instant WhatsApp test-drive booking and condition inspection sheets'
-        };
-    }
-
-    // 6. Solar Installation & Renewable Energy
-    if (n.includes('solar') || n.includes('energy') || n.includes('renewable')) {
-        return {
-            category: 'Solar Energy Solutions',
-            painPoint: 'residential and commercial leads hesitating and vanishing due to ambiguity around net savings, payback periods, and subsidies',
-            solution: 'interactive Solar ROI calculators that instantly quantify financial savings and filter decision-ready property owners'
         };
     }
 
@@ -106,17 +117,17 @@ function getNicheContext(niche = '') {
 }
 
 // Dynamic Humanized Fallback (If APIs are completely unreachable)
-function getDeepFallback(cleanName, ctx) {
-    const greeting = getRandomGreeting(cleanName);
+function getDeepFallback(businessName, ctx) {
+    const greeting = getHumanGreeting(businessName);
     return `${greeting}
 
-Noticed your active presence in the ${ctx.category} space.
+We noticed your active presence in the ${ctx.category} space.
 
-A major recurring challenge we see businesses facing right now is ${ctx.painPoint}.
+A major recurring operational challenge we see teams facing right now is ${ctx.painPoint}.
 
-At AUG Consultancy (AfterUs Global), we deploy ${ctx.solution}, so your core team only spends time on genuine, qualified prospects.
+At AUG Consultancy (AfterUs Global - afterusglobal.com), we do not push basic templates. We engineer ${ctx.solution}, ensuring your core sales team only spends bandwidth on decision-ready prospects.
 
-Would you be open to a brief 2-minute quick connect sometime this week to see if this fits your current setup?
+Would you be open to a brief 2-minute quick connect sometime this week to see if this fits your setup?
 
 Regards,
 Team, AUG Consultancy`;
@@ -138,11 +149,11 @@ async function generateViaGroq(prompt) {
                 messages: [
                     { 
                         role: "system", 
-                        content: "You are an authentic, senior business consultant representing 'AUG Consultancy' (AfterUs Global - afterusglobal.com). You write direct, natural B2B messages. Never sound like a generic bot or AI. Output clean, raw text only." 
+                        content: "You are a senior tech & growth consultant representing 'AUG Consultancy' (AfterUs Global - afterusglobal.com). You write observant, consultative, real human-to-human messages. Never sound like a bot, automated script, or marketer. Output clean, raw text only." 
                     },
                     { role: "user", content: prompt }
                 ],
-                temperature: 0.70, // Balanced entropy for varied, non-repetitive phrasing
+                temperature: 0.65, // Controlled natural variation without hallucinating
                 max_tokens: 380
             });
 
@@ -196,55 +207,52 @@ async function generateViaGemini(prompt) {
  * AI Message Generation Engine (Dynamic Human Openings + Dual AI Engine)
  */
 async function generateMessage(name, niche, isReply = false, clientMessage = "", stage = "new") {
+    const businessName = cleanBusinessName(name);
     const ctx = getNicheContext(niche);
-    const cleanName = String(name || '').split(' ')[0].replace(/[^a-zA-Z]/g, '') || 'there';
-    const chosenGreeting = getRandomGreeting(cleanName);
+    const chosenGreeting = getHumanGreeting(businessName);
 
     let prompt = "";
     if (isReply) {
         prompt = `
-You are the business representative at 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
-Client: ${name} (Industry: ${niche})
-Client's incoming message: "${clientMessage}"
+You are the senior technical consultant at 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
+Client / Business Name: "${businessName}" (Industry: ${niche || 'Business'})
+Client's incoming WhatsApp message: "${clientMessage}"
 
-INBOUND RULES:
+INBOUND CONSULTING RULES:
 1. DETECT CLIENT LANGUAGE:
-   - If the client wrote in Hindi or Hinglish, reply politely in natural Hinglish.
+   - If the client wrote in Hindi or Hinglish, reply politely in crisp, natural conversational Hinglish.
    - If the client wrote in English, reply in professional corporate English.
-2. Keep it concise (2-4 lines).
-3. If technical or custom pricing questions arise, state:
-   "I will verify the exact scope with our core technical team and get back to you shortly."
+2. Keep it concise (2-3 lines). Address their exact query with authority.
+3. If they ask about custom tech scope, pricing, or technical timelines:
+   State clearly: "I will review the exact technical scope with our engineering team and get back to you shortly."
 4. If they show interest, propose a brief 5-minute introductory call or Google Meet.
-5. Plain text only. No quotes, no markdown symbols (*, #, _).
+5. Plain text only. Absolutely NO quotes, NO asterisks (*), NO hashtags (#).
 6. Signature MUST be:
 Regards,
 Team, AUG Consultancy
 `;
     } else {
         prompt = `
-Write a sharp, natural, and highly personalized B2B cold outreach WhatsApp message for 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
+Write a high-converting, deeply consultative B2B WhatsApp message for 'AUG Consultancy' (AfterUs Global - afterusglobal.com).
 
-RECIPIENT & CONTEXT:
-Recipient: ${cleanName}
-Niche / Target Industry: ${ctx.category}
-Identified Bottleneck / Friction: ${ctx.painPoint}
+PROSPECT & CONTEXT:
+Target Business Name: "${businessName}"
+Target Industry / Niche: ${ctx.category}
+Identified Bottleneck / Operational Friction: ${ctx.painPoint}
 Our Concrete Solution: ${ctx.solution}
 
-OUR CORE SERVICES AT AFTERUS GLOBAL (afterusglobal.com):
-- Custom high-speed Web & App Development (React, Next.js).
-- Interactive Client-Qualification Funnels & Calculators.
-- Autonomous 24/7 WhatsApp AI Chatbots & Lead Filtration Systems.
-- Paid Acquisition Architecture (Meta/Google Ads + High-converting landing pages).
+ABOUT AFTERUS GLOBAL (afterusglobal.com):
+We are an enterprise digital systems consultancy. We DO NOT push basic websites or generic digital marketing. 
+We engineer custom lead qualification architectures, interactive ROI/pricing funnels, and automated WhatsApp intake systems that stop non-serious prospects from wasting sales bandwidth.
 
-MANDATORY ANTI-BOT INSTRUCTIONS:
-1. GREETING: Start EXACTLY with this line: "${chosenGreeting}" (Do NOT invent your own greeting).
-2. NO ROBOTIC CLICHÉS: Strictly NEVER use phrases like "speaking as a founder", "as a founder", "I am reaching out to you", "hope this email finds you well", "in today's fast-paced world", "game-changer", or "revolutionize".
-3. VARIED & OBSERVANT PHRASING: Do not write like a templated sales script. Write like an observant tech consultant who genuinely understands how the ${ctx.category} business operates. Address how ${ctx.painPoint} is actively draining their team's bandwidth and how ${ctx.solution} fixes it.
-4. LENGTH: 4 to 6 concise, well-spaced lines. Natural line breaks.
-5. LANGUAGE: Plain, sharp corporate English.
-6. FORBIDDEN WORDS: Never use 'Free', '100% Guarantee', 'Cheap', 'Discount', 'Best Price', 'Offer', 'Revolutionary', 'Skyrocket'.
-7. FORMATTING: Raw text only. DO NOT include quotes (""), asterisks (*), hashtags (#), or subject headers.
-8. ENDING: Conclude naturally with:
+MANDATORY WRITING INSTRUCTIONS:
+1. GREETING: Start EXACTLY with this line: "${chosenGreeting}" (Do NOT shorten the business name to a single word).
+2. NO GENERIC SALES PITCH: Strictly DO NOT say "We make websites" or "Improve your website". Address their specific operational friction (${ctx.painPoint}) and explain how our qualification architecture (${ctx.solution}) protects their team's time.
+3. FORBIDDEN CLICHÉS: Never use "as a founder", "hope you're having a productive week", "hope this email finds you well", "I am reaching out to you", "in today's fast-paced world", "game-changer", or "revolutionize".
+4. FORBIDDEN WORDS: 'Free', '100% Guarantee', 'Cheap', 'Discount', 'Best Price', 'Offer', 'Revolutionary', 'Skyrocket'.
+5. FORMATTING: Raw plain text ONLY. Absolutely NO asterisks (*), hashtags (#), or quotation marks ("").
+6. LENGTH: 4 to 5 concise, well-spaced lines with natural line breaks.
+7. CLOSING: Conclude naturally with:
 Would you be open to a brief 2-minute quick connect sometime this week?
 
 Regards,
@@ -261,34 +269,34 @@ Team, AUG Consultancy
     if (geminiResult) return geminiResult;
 
     // Step 3: Guaranteed Human Fallback
-    console.log(`🛡️ Deep fallback template active for ${cleanName} (${ctx.category})`);
-    return getDeepFallback(cleanName, ctx);
+    console.log(`🛡️ Deep fallback template active for ${businessName} (${ctx.category})`);
+    return getDeepFallback(businessName, ctx);
 }
 
 /**
  * Dedicated Multi-Day Follow-Up Generator
  */
 async function generateFollowupMessage(name, niche, stage) {
+    const businessName = cleanBusinessName(name);
     const ctx = getNicheContext(niche);
-    const cleanName = String(name || '').split(' ')[0].replace(/[^a-zA-Z]/g, '') || 'there';
 
     if (stage === "day21") {
-        return `Hello ${cleanName},
+        return `Hello ${businessName},
 
-It seems this isn't a current priority, so I'll make sure not to crowd your inbox further.
+It seems this isn't a current priority for your team, so I'll make sure not to crowd your inbox further.
 
-If you ever decide to streamline your lead qualification funnels or web architecture down the road, feel free to reach out anytime.
+If you ever decide to streamline your lead qualification systems or digital client intake down the road, feel free to reach out anytime.
 
-Wishing you continued success.
+Wishing ${businessName} continued success.
 
 Regards,
 Team, AUG Consultancy`;
     }
 
     if (stage === "day7") {
-        return `Hi ${cleanName},
+        return `Hi ${businessName},
 
-We recently helped similar teams in ${ctx.category} filter out non-serious queries and convert higher-intent leads faster.
+We recently helped similar teams in the ${ctx.category} space filter out non-serious queries and convert higher-intent clients without back-and-forth manual follow-ups.
 
 Would you be open to checking out a 2-minute walkthrough of how the system works?
 
@@ -297,9 +305,9 @@ Team, AUG Consultancy`;
     }
 
     // Default Day 3 follow-up
-    return `Hi ${cleanName},
+    return `Hi ${businessName},
 
-Just checking in to see if my previous note came through regarding your digital lead infrastructure.
+Just checking in to see if my previous note came through regarding your client intake and qualification setup.
 
 Would you be open to a brief 2-minute connect sometime this week?
 

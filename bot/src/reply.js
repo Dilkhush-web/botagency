@@ -2,69 +2,59 @@
 const { generateMessage } = require('./gemini');
 const { updateCellByNumber, getLeadByNumber } = require('./sheet');
 
-// In-memory queue to debounce multiple messages from the same client
+// In-memory queue to buffer/debounce multiple messages from the same client
 const pendingReplies = new Map();
 
-// 10 se 20 minutes ka random delay (in milliseconds)
-function getRandomReplyDelay() {
-    const minMins = 10;
-    const maxMins = 20;
-    const randomMinutes = Math.floor(Math.random() * (maxMins - minMins + 1)) + minMins;
-    return randomMinutes * 60 * 1000;
+// 1.5 se 4 minute ka realistic human response delay (Agency standard)
+function getRealisticHumanDelay() {
+    const minSecs = 90;   // 1.5 min
+    const maxSecs = 240;  // 4 min
+    const randomSecs = Math.floor(Math.random() * (maxSecs - minSecs + 1)) + minSecs;
+    return randomSecs * 1000;
 }
 
 /**
- * Handle incoming WhatsApp message with human simulation
+ * Handle incoming WhatsApp message with enterprise human simulation
  * @param {import('whatsapp-web.js').Client} client 
  * @param {import('whatsapp-web.js').Message} message 
+ * @param {Object} lead
  */
-async function handleIncomingMessage(client, message) {
+async function handleIncomingMessage(client, message, lead) {
     try {
-        // 1. Basic Guards: Ignore status broadcasts, groups, or bot's own messages
-        if (message.isStatus || message.from.includes('@g.us') || message.fromMe) {
-            return;
-        }
+        if (!message || message.fromMe || message.isStatus) return;
 
-        // WhatsApp number extract karna
-        const fromNumber = message.from.replace('@c.us', '');
+        const fromNumber = message.from.split('@')[0].replace(/\D/g, '');
         const clientText = message.body ? message.body.trim() : '';
 
         if (!clientText) return;
 
-        // 2. Check karo kya yeh lead hamari Google Sheet mein exist karti hai
-        const lead = await getLeadByNumber(fromNumber);
-        if (!lead) {
-            // Agar unknown number hai jo sheet mein nahi hai, toh safe side ignore ya log karo
-            return;
-        }
+        console.log(`\n📩 Incoming Lead Inquiry: ${lead.name} (${fromNumber})`);
+        console.log(`💬 Client Text: "${clientText}"`);
 
-        console.log(`\n📩 Incoming message from ${lead.name} (${fromNumber}): "${clientText}"`);
+        // Sheet me turant status 'Replied' mark karo taaki multi-day follow-up band ho jaye
+        try {
+            await updateCellByNumber(fromNumber, 'F', 'Replied');
+        } catch (e) {}
 
-        // Sheet mein turant status 'Replied' mark karo taaki standard follow-up pause ho jaye
-        await updateCellByNumber(fromNumber, 'F', 'Replied');
-
-        // 3. Debounce Logic: Agar client ne lagatar messages bheje hain, toh unhe combine karo
+        // 1. Debounce Logic: Agar client ne lagatar 2-3 messages bheje hain toh unhe combine karein
         if (pendingReplies.has(fromNumber)) {
             const existing = pendingReplies.get(fromNumber);
             clearTimeout(existing.timer);
-            existing.fullConversation += `\nClient: ${clientText}`;
-            console.log(`⏳ Additional message buffered from ${lead.name}. Resetting timer...`);
+            existing.fullConversation += `\n${clientText}`;
+            console.log(`⏳ Additional message buffered from ${lead.name}. Timer refreshed.`);
 
-            // Naya random timer schedule karo
-            const delay = getRandomReplyDelay();
-            existing.timer = setTimeout(() => executeReply(client, fromNumber, lead, existing.fullConversation), delay);
+            const delay = getRealisticHumanDelay();
+            existing.timer = setTimeout(() => executeReply(client, fromNumber, lead), delay);
             return;
         }
 
-        // Pehla message: 10-20 min ka delay schedule karo
-        const delayMs = getRandomReplyDelay();
+        // 2. Schedule realistic busy consultant response delay
+        const delayMs = getRealisticHumanDelay();
         const delayMins = (delayMs / 60000).toFixed(1);
-        console.log(`🕒 Human Simulation: ${lead.name} ko ${delayMins} minute baad reply jayega.`);
+        console.log(`🕒 Natural Consultant Delay: ${lead.name} ko ${delayMins} minute baad human response jayega.`);
 
         const timer = setTimeout(() => {
-            const data = pendingReplies.get(fromNumber);
-            const convText = data ? data.fullConversation : clientText;
-            executeReply(client, fromNumber, lead, convText);
+            executeReply(client, fromNumber, lead);
         }, delayMs);
 
         pendingReplies.set(fromNumber, {
@@ -73,45 +63,88 @@ async function handleIncomingMessage(client, message) {
         });
 
     } catch (error) {
-        console.error('❌ Error handling incoming message:', error.message || error);
+        console.error('❌ Error in handleIncomingMessage:', error.message || error);
     }
 }
 
 /**
- * Executes the reply after the randomized delay
+ * Executes the reply after the randomized delay with Human Takeover validation
  */
-async function executeReply(client, fromNumber, lead, fullMessageText) {
+async function executeReply(client, fromNumber, lead) {
     try {
+        const item = pendingReplies.get(fromNumber);
         pendingReplies.delete(fromNumber);
 
-        console.log(`\n🤖 Generating human-like reply for ${lead.name}...`);
-        const replyText = await generateMessage(lead.name, lead.niche, true, fullMessageText);
+        const convText = item ? item.fullConversation : '';
+        const chatId = `${fromNumber}@c.us`;
 
-        if (!replyText) {
-            console.log(`⚠️ AI failed to generate reply for ${lead.name}`);
+        // 1. CRITICAL HUMAN TAKEOVER INTERCEPT:
+        // Delay ke dauran check karein ki kya aapne apne phone se khud baat shuru kar di hai
+        try {
+            const chat = await client.getChatById(chatId);
+            const messages = await chat.fetchMessages({ limit: 5 });
+            const lastMsg = messages[messages.length - 1];
+
+            // Agar aakhiri message aapne khud phone se bheja hai, toh AI cancel ho jayega
+            if (lastMsg && lastMsg.fromMe) {
+                console.log(`🛑 Human Intervention Verified: Phone se already reply diya ja chuka hai ${lead.name} ko. AI response cancelled.`);
+                await updateCellByNumber(fromNumber, 'F', 'In-Discussion');
+                return;
+            }
+        } catch (chatCheckErr) {
+            // Safe fallback continue
+        }
+
+        // Check if lead status in sheet was already set to In-Discussion / Manual
+        const latestLead = await getLeadByNumber(fromNumber);
+        if (latestLead && (latestLead.status === 'In-Discussion' || latestLead.status === 'Manual' || latestLead.status === 'Dead')) {
+            console.log(`🛑 Lead ${lead.name} status is '${latestLead.status}'. Skipping automated bot reply.`);
             return;
         }
 
-        const chatId = `${fromNumber}@c.us`;
+        console.log(`\n🤖 Generating consultative human response for ${lead.name}...`);
+        
+        // 2. Generate Contextual Response (Groq -> Gemini dual engine)
+        const replyText = await generateMessage(lead.name, lead.niche, true, convText);
+
+        if (!replyText || replyText.trim().length === 0) {
+            console.log(`⚠️ AI failed to generate response for ${lead.name}`);
+            return;
+        }
+
         const chat = await client.getChatById(chatId);
 
-        // 4. Ultra-Human Simulation: Blue tick aur typing indicator
-        await chat.sendSeen(); // Seen mark karo
-        await chat.sendStateTyping(); // "typing..." show karega
+        // 3. Ultra-Human Simulation: Blue tick aur typing indicator
+        try {
+            await chat.sendSeen(); // Mark as read
+            await new Promise(res => setTimeout(res, 1200));
 
-        // 4 se 8 seconds ka typing delay taaki bot-like paste na lage
-        const typingDelay = Math.floor(Math.random() * 4000) + 4000;
-        await new Promise(res => setTimeout(res, typingDelay));
+            if (chat.sendStateTyping) {
+                await chat.sendStateTyping();
+            }
 
-        await chat.clearState();
-        await client.sendMessage(chatId, replyText);
+            // 4 se 7 seconds natural typing speed
+            const typingDuration = Math.floor(Math.random() * 3000) + 4000;
+            await new Promise(res => setTimeout(res, typingDuration));
 
-        console.log(`✅ Human Reply sent to ${lead.name} (${fromNumber}):\n${replyText}\n`);
+            if (chat.clearState) {
+                await chat.clearState();
+            }
+        } catch (typingErr) {
+            // Typing indicator fail hone par message block nahi hoga
+        }
 
-        // Sheet mein update karo ki reply de diya gaya hai
-        await updateCellByNumber(fromNumber, 'F', 'In-Discussion');
+        // 4. Send Message
+        await client.sendMessage(chatId, replyText.trim());
+        console.log(`✅ Consultant Reply sent to ${lead.name} (${fromNumber}):\n---\n${replyText.trim()}\n---`);
+
+        // 5. Update Sheet Status to 'In-Discussion'
+        try {
+            await updateCellByNumber(fromNumber, 'F', 'In-Discussion');
+        } catch (sheetErr) {}
+
     } catch (err) {
-        console.error(`❌ Failed to send reply to ${fromNumber}:`, err.message || err);
+        console.error(`❌ Failed to deliver reply to ${fromNumber}:`, err.message || err);
     }
 }
 
