@@ -41,18 +41,20 @@ process.on('unhandledRejection', (reason) => {
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-// CRITICAL FIX: Force unlock any lingering Chromium locks in all subfolders
-function unlockChromiumProfile(dirPath) {
-    if (!fs.existsSync(dirPath)) return;
+// ROOT FIX: Chromium lock removal directly via shell on startup
+function unlockBrowserProfile() {
     try {
-        // Kill existing chromium instances if any
-        try { execSync('pkill -9 -f "(chrome|chromium)" || true'); } catch (e) {}
+        // Kill any existing browser process
+        try { execSync('pkill -9 -f "(chrome|chromium)" 2>/dev/null || true'); } catch (e) {}
 
-        // Remove all Singleton symlinks, sockets, and lock files
-        execSync(`find "${dirPath}" -name "*Singleton*" -exec rm -rf {} + 2>/dev/null || true`);
-        console.log('🧹 Chromium SingletonLocks cleaned successfully.');
+        // Remove Singleton symlinks across the entire system volume and /tmp
+        execSync('rm -rf /tmp/.*Singleton* /tmp/*Singleton* 2>/dev/null || true');
+        execSync(`find "${authDir}" -type l -name "*Singleton*" -delete 2>/dev/null || true`);
+        execSync(`find "${authDir}" -type f -name "*Singleton*" -delete 2>/dev/null || true`);
+        execSync(`find "${authDir}" -type s -name "*Singleton*" -delete 2>/dev/null || true`);
+        console.log('🧹 Chromium Singleton locks completely purged.');
     } catch (err) {
-        console.warn('⚠️ Lock cleanup note:', err.message);
+        console.warn('⚠️ Lock purge warning:', err.message);
     }
 }
 
@@ -77,8 +79,8 @@ async function startBot() {
     try {
         await connectDatabase();
 
-        // Launch से ठीक पहले पुराने लॉक्स हटाएं
-        unlockChromiumProfile(authDir);
+        // Browser initiate karne se theek pehle system level lock unlock karo
+        unlockBrowserProfile();
 
         const client = new Client({
             authStrategy: new LocalAuth({
@@ -110,7 +112,8 @@ async function startBot() {
                     '--metrics-recording-only',
                     '--no-default-browser-check',
                     '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,AudioServiceOutOfProcess',
-                    '--blink-settings=imagesEnabled=false'
+                    '--blink-settings=imagesEnabled=false',
+                    '--disk-cache-dir=/tmp/chromium-cache'
                 ]
             }
         });
