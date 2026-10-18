@@ -37,20 +37,20 @@ process.on('unhandledRejection', (reason) => {
     console.error('⚠️ Unhandled Rejection:', reason);
 });
 
-// Persistent Volume Directory (Railway Mount Path: /app/.wwebjs_auth)
+// Mounted volume directory (/app/.wwebjs_auth)
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-// 100% BULLETPROOF FIX: Force delete all Linux Chromium Singleton symlinks and sockets
-function forceCleanChromiumLocks(dirPath) {
+// CRITICAL FIX: Force unlock any lingering Chromium locks in all subfolders
+function unlockChromiumProfile(dirPath) {
     if (!fs.existsSync(dirPath)) return;
     try {
-        // Kill any rogue chromium/chrome processes if running
-        try { execSync('pkill -f "(chrome|chromium)" || true'); } catch (e) {}
+        // Kill existing chromium instances if any
+        try { execSync('pkill -9 -f "(chrome|chromium)" || true'); } catch (e) {}
 
-        // Delete all Singleton lock files, sockets, and symlinks on disk
-        execSync(`find "${dirPath}" -name "Singleton*" -delete 2>/dev/null || true`);
-        console.log('🧹 Purane container ke saare stale Chromium locks force clean ho gaye.');
+        // Remove all Singleton symlinks, sockets, and lock files
+        execSync(`find "${dirPath}" -name "*Singleton*" -exec rm -rf {} + 2>/dev/null || true`);
+        console.log('🧹 Chromium SingletonLocks cleaned successfully.');
     } catch (err) {
         console.warn('⚠️ Lock cleanup note:', err.message);
     }
@@ -77,8 +77,8 @@ async function startBot() {
     try {
         await connectDatabase();
 
-        // Browser launch se theek pehle disk locks force clear karo
-        forceCleanChromiumLocks(authDir);
+        // Launch से ठीक पहले पुराने लॉक्स हटाएं
+        unlockChromiumProfile(authDir);
 
         const client = new Client({
             authStrategy: new LocalAuth({
@@ -129,7 +129,7 @@ async function startBot() {
                     console.log('==================================================\n');
                     return;
                 } catch (e) {
-                    console.log('⚠️ Pairing request attempt failed, showing QR:', e.message || e);
+                    console.log('⚠️ Pairing request failed, displaying QR fallback:', e.message || e);
                 }
             }
 
@@ -173,13 +173,13 @@ async function startBot() {
     }
 }
 
-// Keep-alive HTTP server for Railway Port Binding
+// Keep-alive HTTP server for Railway
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('AUG Consultancy Autonomous Bot Worker is Active\n');
 }).listen(PORT, () => {
-    console.log(`🌐 Keep-alive server active on port ${PORT}`);
+    console.log(`🌐 Server running on port ${PORT}`);
 });
 
 startBot();
