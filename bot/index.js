@@ -3,6 +3,7 @@ require('dotenv').config();
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const mongoose = require('mongoose');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -40,22 +41,16 @@ process.on('unhandledRejection', (reason) => {
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-// CRITICAL FIX: Clean stale Chromium Singleton locks left from previous container runs
-function cleanChromiumLocks(dirPath) {
+// 100% BULLETPROOF FIX: Force delete all Linux Chromium Singleton symlinks and sockets
+function forceCleanChromiumLocks(dirPath) {
     if (!fs.existsSync(dirPath)) return;
     try {
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const entry of entries) {
-            const fullPath = path.join(dirPath, entry.name);
-            if (entry.isDirectory()) {
-                cleanChromiumLocks(fullPath);
-            } else if (entry.name.startsWith('SingletonLock') || entry.name.startsWith('SingletonSocket') || entry.name.startsWith('SingletonCookie')) {
-                try {
-                    fs.unlinkSync(fullPath);
-                    console.log(`🧹 Removed stale browser lock: ${entry.name}`);
-                } catch (e) {}
-            }
-        }
+        // Kill any rogue chromium/chrome processes if running
+        try { execSync('pkill -f "(chrome|chromium)" || true'); } catch (e) {}
+
+        // Delete all Singleton lock files, sockets, and symlinks on disk
+        execSync(`find "${dirPath}" -name "Singleton*" -delete 2>/dev/null || true`);
+        console.log('🧹 Purane container ke saare stale Chromium locks force clean ho gaye.');
     } catch (err) {
         console.warn('⚠️ Lock cleanup note:', err.message);
     }
@@ -82,8 +77,8 @@ async function startBot() {
     try {
         await connectDatabase();
 
-        // ब्राउज़र लॉन्च से पहले पुराने कंटेनर के लॉक डिलीट करें
-        cleanChromiumLocks(authDir);
+        // Browser launch se theek pehle disk locks force clear karo
+        forceCleanChromiumLocks(authDir);
 
         const client = new Client({
             authStrategy: new LocalAuth({
@@ -114,7 +109,7 @@ async function startBot() {
                     '--disable-translate',
                     '--metrics-recording-only',
                     '--no-default-browser-check',
-                    '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider',
+                    '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,AudioServiceOutOfProcess',
                     '--blink-settings=imagesEnabled=false'
                 ]
             }
