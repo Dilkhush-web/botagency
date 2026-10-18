@@ -97,22 +97,26 @@ async function startBot() {
         });
 
         client.on('qr', async (qr) => {
-            const pairingNumber = process.env.PAIRING_NUMBER;
-            if (pairingNumber && typeof client.requestPairingCode === 'function') {
+            const rawPairing = process.env.PAIRING_NUMBER || '918002468432';
+            const cleanNumber = String(rawPairing).replace(/\D/g, '');
+
+            if (cleanNumber && typeof client.requestPairingCode === 'function') {
                 try {
-                    const code = await client.requestPairingCode(pairingNumber.replace(/\D/g, ''));
+                    // Small delay to ensure browser page socket is fully attached
+                    await new Promise(r => setTimeout(r, 2000));
+                    const code = await client.requestPairingCode(cleanNumber);
                     console.log('\n==================================================');
                     console.log(`📱 WHATSAPP PAIRING CODE: [ ${code} ]`);
                     console.log(`👉 Phone WhatsApp > Linked Devices > Link with phone number par yeh code enter karein!`);
                     console.log('==================================================\n');
+                    return;
                 } catch (e) {
-                    console.log('⚠️ Pairing request fallback to QR:');
-                    qrcode.generate(qr, { small: true });
+                    console.log('⚠️ Pairing code request attempt failed:', e.message || e);
                 }
-            } else {
-                console.log('\n👇 QR Code:');
-                qrcode.generate(qr, { small: true });
             }
+
+            console.log('\n👇 Fallback QR Code:');
+            qrcode.generate(qr, { small: true });
         });
 
         let isReadyInitialized = false;
