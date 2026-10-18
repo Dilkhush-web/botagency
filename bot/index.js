@@ -40,6 +40,27 @@ process.on('unhandledRejection', (reason) => {
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
+// CRITICAL FIX: Clean stale Chromium Singleton locks left from previous container runs
+function cleanChromiumLocks(dirPath) {
+    if (!fs.existsSync(dirPath)) return;
+    try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dirPath, entry.name);
+            if (entry.isDirectory()) {
+                cleanChromiumLocks(fullPath);
+            } else if (entry.name.startsWith('SingletonLock') || entry.name.startsWith('SingletonSocket') || entry.name.startsWith('SingletonCookie')) {
+                try {
+                    fs.unlinkSync(fullPath);
+                    console.log(`🧹 Removed stale browser lock: ${entry.name}`);
+                } catch (e) {}
+            }
+        }
+    } catch (err) {
+        console.warn('⚠️ Lock cleanup note:', err.message);
+    }
+}
+
 console.log('🚀 AUG Master Bot Initializing [Engine: LocalAuth + Persistent Storage]...');
 
 async function connectDatabase() {
@@ -60,6 +81,9 @@ async function connectDatabase() {
 async function startBot() {
     try {
         await connectDatabase();
+
+        // ब्राउज़र लॉन्च से पहले पुराने कंटेनर के लॉक डिलीट करें
+        cleanChromiumLocks(authDir);
 
         const client = new Client({
             authStrategy: new LocalAuth({
@@ -102,7 +126,6 @@ async function startBot() {
 
             if (cleanNumber && typeof client.requestPairingCode === 'function') {
                 try {
-                    // Small delay to ensure browser page socket is fully attached
                     await new Promise(r => setTimeout(r, 2000));
                     const code = await client.requestPairingCode(cleanNumber);
                     console.log('\n==================================================');
@@ -111,7 +134,7 @@ async function startBot() {
                     console.log('==================================================\n');
                     return;
                 } catch (e) {
-                    console.log('⚠️ Pairing code request attempt failed:', e.message || e);
+                    console.log('⚠️ Pairing request attempt failed, showing QR:', e.message || e);
                 }
             }
 
