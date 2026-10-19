@@ -4,24 +4,20 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
 // Global crash protectors
 process.on('uncaughtException', (err) => {
     const msg = (err && err.message) ? err.message : String(err);
     if (
-        msg.includes('File not found for id') ||
-        msg.includes('getaddrinfo ENOTFOUND') ||
-        msg.includes('MongoNetworkError') ||
-        msg.includes('timed out') ||
         msg.includes('Execution context was destroyed') ||
         msg.includes('Protocol error') ||
-        msg.includes('ENOENT') ||
-        msg.includes('RemoteAuth')
+        msg.includes('Navigation') ||
+        msg.includes('getaddrinfo ENOTFOUND') ||
+        msg.includes('MongoNetworkError')
     ) {
-        console.warn('⚠️ Safe warning handled. Client continuing...');
+        console.warn('⚠️ Safe warning handled. Continuing execution...');
         return;
     }
     console.error('⚠️ Uncaught Exception:', err);
@@ -30,42 +26,78 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
     const msg = (reason && reason.message) ? reason.message : String(reason);
     if (
-        msg.includes('File not found for id') ||
-        msg.includes('getaddrinfo ENOTFOUND') ||
-        msg.includes('MongoNetworkError') ||
         msg.includes('Execution context was destroyed') ||
-        msg.includes('Protocol error')
+        msg.includes('Protocol error') ||
+        msg.includes('MongoNetworkError')
     ) {
-        console.warn('⚠️ Async session update handled safely.');
+        console.warn('⚠️ Safe async warning handled.');
         return;
     }
     console.error('⚠️ Unhandled Rejection:', reason);
 });
 
-const BOT_SESSION_ID = 'AUG_CORE_SESSION';
-
+// Mounted Volume Directory (Railway Mount Path: /app/.wwebjs_auth)
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-console.log(`🚀 AUG Master Bot Initializing [RemoteAuth Session: ${BOT_SESSION_ID}]...`);
-
-async function startBot() {
+// 🛡️ BULLETPROOF DEEP RECURSIVE LOCK REMOVER
+// Yeh function session folder ke andar ke har sub-folder me jakar Singleton locks ko jadd se mita dega.
+function removeAllLocksDeep(dir) {
+    if (!fs.existsSync(dir)) return;
     try {
-        console.log(`🔄 Connecting to MongoDB Atlas...`);
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                removeAllLocksDeep(fullPath);
+            } else {
+                if (
+                    entry.name.includes('Singleton') ||
+                    entry.name.includes('lockfile') ||
+                    entry.name === 'SingletonLock' ||
+                    entry.name === 'SingletonSocket' ||
+                    entry.name === 'SingletonCookie'
+                ) {
+                    try {
+                        fs.rmSync(fullPath, { force: true, recursive: true });
+                        console.log(`🧹 Deleted stale lock file: ${fullPath}`);
+                    } catch (e) {}
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('⚠️ Lock cleaning notice:', err.message);
+    }
+}
+
+console.log('🚀 AUG Master Bot Initializing [Engine: LocalAuth + Persistent Storage]...');
+
+async function connectDatabase() {
+    if (!process.env.MONGODB_URI) return;
+    try {
+        console.log('🔄 Connecting to MongoDB for lead tracking...');
         await mongoose.connect(process.env.MONGODB_URI, {
             serverSelectionTimeoutMS: 20000,
             socketTimeoutMS: 45000,
             family: 4
         });
-        console.log('✅ MongoDB Connected! Session state synchronized.');
+        console.log('✅ MongoDB Connected successfully!');
+    } catch (err) {
+        console.warn('⚠️ Database connection warning:', err.message);
+    }
+}
 
-        const store = new MongoStore({ mongoose });
+async function startBot() {
+    try {
+        await connectDatabase();
+
+        // 🚀 Browser launch hone se theek pehle session folder ke saare purane locks saaf karo
+        const targetSessionDir = path.join(authDir, 'session-AUG_CORE_SESSION');
+        removeAllLocksDeep(targetSessionDir);
 
         const client = new Client({
-            authStrategy: new RemoteAuth({
-                clientId: BOT_SESSION_ID,
-                store: store,
-                backupSyncIntervalMs: 300000,
+            authStrategy: new LocalAuth({
+                clientId: 'AUG_CORE_SESSION',
                 dataPath: authDir
             }),
             puppeteer: {
@@ -112,7 +144,7 @@ async function startBot() {
                     console.log('==================================================\n');
                     return;
                 } catch (e) {
-                    console.log('⚠️ Pairing request failed, fallback to QR:', e.message || e);
+                    console.log('⚠️ Pairing request failed, displaying QR fallback:', e.message || e);
                 }
             }
 
@@ -126,7 +158,7 @@ async function startBot() {
             if (isReadyInitialized) return;
             isReadyInitialized = true;
 
-            console.log(`\n✅ SUCCESS: WhatsApp Client is READY! (${BOT_SESSION_ID} connected)\n`);
+            console.log('\n✅ SUCCESS: WhatsApp Client is READY & PERMANENTLY CONNECTED!\n');
             console.log('==================================================');
             console.log('🤖 AUG BOT IS LIVE & READY FOR ACTION!');
             console.log('==================================================\n');
@@ -138,14 +170,11 @@ async function startBot() {
             startDailyCron(client);
 
             console.log('✅ Sabhi engines live ho chuke hain.');
+            console.log('📡 Bot background mein persistent storage ke sath run kar raha hai.\n');
         });
 
         client.on('authenticated', () => {
-            console.log('🔐 Authenticated successfully.');
-        });
-
-        client.on('remote_session_saved', () => {
-            console.log(`💾 Remote session [${BOT_SESSION_ID}] permanently saved to MongoDB Atlas!`);
+            console.log('🔐 Authenticated successfully. Session saved directly to persistent volume disk.');
         });
 
         client.on('auth_failure', (msg) => {
@@ -159,13 +188,13 @@ async function startBot() {
     }
 }
 
-// Keep-alive HTTP server for Railway
+// Keep-alive HTTP server for Railway Port Binding
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('AUG Consultancy Autonomous Bot Worker is Active\n');
 }).listen(PORT, () => {
-    console.log(`🌐 Keep-alive server active on port ${PORT}`);
+    console.log(`🌐 Server running on port ${PORT}`);
 });
 
 startBot();
