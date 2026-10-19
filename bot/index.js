@@ -37,36 +37,43 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Mounted Volume Directory (Railway Mount Path: /app/.wwebjs_auth)
+// Mounted Volume Directory (Railway Mount Path: /app/.wwebjs_auth)
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-// 🛡️ BULLETPROOF DEEP RECURSIVE LOCK REMOVER
-// Yeh function session folder ke andar ke har sub-folder me jakar Singleton locks ko jadd se mita dega.
-function removeAllLocksDeep(dir) {
-    if (!fs.existsSync(dir)) return;
+// 🛡️ ACCURATE SESSION LOCK CLEANER
+function unlockBrowserProfile() {
     try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                removeAllLocksDeep(fullPath);
-            } else {
-                if (
-                    entry.name.includes('Singleton') ||
-                    entry.name.includes('lockfile') ||
-                    entry.name === 'SingletonLock' ||
-                    entry.name === 'SingletonSocket' ||
-                    entry.name === 'SingletonCookie'
-                ) {
-                    try {
-                        fs.rmSync(fullPath, { force: true, recursive: true });
-                        console.log(`🧹 Deleted stale lock file: ${fullPath}`);
-                    } catch (e) {}
+        console.log('🧹 Cleaning Chromium session locks inside volume...');
+        
+        // LocalAuth session folder ka exact path
+        const sessionFolder = path.join(authDir, 'session-AUG_CORE_SESSION');
+        
+        if (fs.existsSync(sessionFolder)) {
+            // Recursive function jo session folder ke andar se saari lock files uda dega
+            const clearLocks = (dir) => {
+                const files = fs.readdirSync(dir, { withFileTypes: true });
+                for (const file of files) {
+                    const fullPath = path.join(dir, file.name);
+                    if (file.isDirectory()) {
+                        clearLocks(fullPath);
+                    } else if (
+                        file.name.includes('Singleton') || 
+                        file.name === 'lockfile' || 
+                        file.name.includes('lock')
+                    ) {
+                        try {
+                            fs.unlinkSync(fullPath);
+                            console.log(`🗑️ Deleted lock: ${fullPath}`);
+                        } catch (e) {}
+                    }
                 }
-            }
+            };
+            clearLocks(sessionFolder);
         }
+        console.log('✨ Session lock cleanup finished.');
     } catch (err) {
-        console.warn('⚠️ Lock cleaning notice:', err.message);
+        console.warn('⚠️ Lock cleanup warning:', err.message);
     }
 }
 
