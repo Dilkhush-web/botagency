@@ -233,11 +233,10 @@ function setupListeners(client) {
 
             // This may also be an uncertain/untracked automated send.
             // Pause conservatively rather than claiming it was manual.
-            await pauseLead(
-                lead,
-                'In-Discussion',
-                'Untracked outgoing message; automation paused'
-            );
+            console.log(
+    `ℹ️ Untracked outgoing message for ${lead.name}. ` +
+    'Sender origin uncertain; Sheet status unchanged.'
+);
         } catch (error) {
             console.error(
                 '❌ Outgoing-message listener error:',
@@ -319,10 +318,8 @@ function setupListeners(client) {
                 text.includes('automated message');
 
             if (isAutoCatalog) {
-                await pauseLead(
-                    lead,
-                    'In-Discussion',
-                    'Catalog/automated-response rule matched'
+                console.log(
+                    `ℹ️ Catalog/automated-response rule matched for ${lead.name}.`
                 );
                 return;
             }
