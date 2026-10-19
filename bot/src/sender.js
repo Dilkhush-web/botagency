@@ -2,153 +2,321 @@
 const { generateMessage } = require('./gemini');
 const { updateCell, getTodayISTDate } = require('./sheet');
 
-// Anti-Ban Delay: Har message ke beech 60-90s ka natural human gap
+// Message pacing: 60–90 seconds.
+// This delay does not guarantee protection from account restrictions.
 function getRandomDelay() {
-    const min = 60000;  // 1 minute
-    const max = 90000;  // 1.5 minute
+    const min = 60000;
+    const max = 90000;
+
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Clean and sanitize Indian phone number (+91, spaces, dashes handle karega)
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Indian phone-number normalization
 function sanitizeNumber(rawNumber) {
     if (!rawNumber) return '';
-    let cleaned = String(rawNumber).split('.')[0].replace(/\D/g, '');
+
+    let cleaned = String(rawNumber)
+        .split('.')[0]
+        .replace(/\D/g, '');
+
     if (cleaned.length === 10) {
         cleaned = '91' + cleaned;
-    } else if (cleaned.length === 11 && cleaned.startsWith('0')) {
+    } else if (
+        cleaned.length === 11 &&
+        cleaned.startsWith('0')
+    ) {
         cleaned = '91' + cleaned.substring(1);
     }
+
     return cleaned;
 }
 
 /**
- * Executes Cold Outreach Messaging Batch
- * Supports flexible parameters from scheduler:
+ * Supports:
  * sendOutreachMessages(client, leads, batchSize)
+ * sendOutreachMessages(client, leads, legacyArg, batchSize)
  */
-async function sendOutreachMessages(client, leads, arg3 = 5, arg4 = 5) {
+async function sendOutreachMessages(
+    client,
+    leads,
+    arg3 = 5,
+    arg4
+) {
+    let sentCount = 0;
+    let skippedCount = 0;
+    let reviewCount = 0;
+    let previousSendAttempt = false;
+
     try {
         if (!Array.isArray(leads) || leads.length === 0) {
-            console.log('ℹ️ Outreach: Processing ke liye koi pending leads nahi hain.');
+            console.log('ℹ️ Outreach: Koi pending leads nahi hain.');
             return;
         }
 
-        // Dynamic slot limit resolve karna (No hardcoded limitation)
-        let maxLeads = 5;
-        if (typeof arg4 === 'number' && !isNaN(arg4) && arg4 > 0) {
-            maxLeads = arg4;
-        } else if (typeof arg3 === 'number' && !isNaN(arg3) && arg3 > 0) {
-            maxLeads = arg3;
+        const requestedLimit =
+            arg4 !== undefined ? arg4 : arg3;
+
+        if (
+            !Number.isInteger(requestedLimit) ||
+            requestedLimit < 1
+        ) {
+            throw new Error(
+                'Batch size must be a positive integer.'
+            );
         }
 
-        const leadsToProcess = leads.slice(0, maxLeads);
-        const todayDateIST = getTodayISTDate();
+        const leadsToProcess = leads.slice(0, requestedLimit);
+        const processedNumbers = new Set();
 
-        console.log(`\n==================================================`);
-        console.log(`📊 Batch Execution Started: Is slot mein ${leadsToProcess.length} leads process hongi.`);
-        console.log(`==================================================`);
+        console.log('\n==================================================');
+        console.log(
+            `📊 Batch Started: Maximum ${leadsToProcess.length} leads.`
+        );
+        console.log('==================================================');
 
         for (let i = 0; i < leadsToProcess.length; i++) {
             const lead = leadsToProcess[i];
-            
-            console.log(`\n--------------------------------------------------`);
-            console.log(`⏳ [${i + 1}/${leadsToProcess.length}] Processing Lead: ${lead.name} (${lead.niche})`);
 
-            // 1. Clean number validation
-            const cleanedDigits = sanitizeNumber(lead.number);
-            if (cleanedDigits.length < 10) {
-                console.log(`❌ Number '${lead.number}' invalid hai. Format check karein.`);
-                try { await updateCell(lead.rowIndex, 'F', 'Invalid Number'); } catch (e) {}
-                continue;
-            }
+            console.log(
+                `\n⏳ [${i + 1}/${leadsToProcess.length}] ` +
+                `Processing: ${lead.name} (${lead.niche})`
+            );
 
-            // 2. WhatsApp registration verify karna
-            let targetJid = `${cleanedDigits}@c.us`;
             try {
-                if (typeof client.getNumberId === 'function') {
-                    const numberId = await client.getNumberId(cleanedDigits);
-                    if (!numberId) {
-                        console.log(`❌ Number '${lead.number}' WhatsApp par register nahi hai!`);
-                        try { await updateCell(lead.rowIndex, 'F', 'Invalid Number'); } catch (e) {}
-                        continue;
-                    }
-                    targetJid = numberId._serialized;
+                // 1. Validate normalized Indian phone number.
+                const cleanedDigits = sanitizeNumber(lead.number);
+
+                if (!/^91[6-9]\d{9}$/.test(cleanedDigits)) {
+                    console.warn(
+                        `❌ Invalid Indian mobile number for ${lead.name}`
+                    );
+
+                    await updateCell(
+                        lead.rowIndex,
+                        'F',
+                        'Invalid Number'
+                    );
+
+                    skippedCount++;
+                    continue;
                 }
-            } catch (verErr) {
-                console.log(`⚠️ Number verification fallback, default JID use ho rahi hai: ${verErr.message}`);
-            }
 
-            // 3. AI Message generation (Groq primary -> Gemini fallback)
-            let messageText = '';
-            try {
-                messageText = await generateMessage(lead.name, lead.niche, false, "", "new");
-            } catch (aiErr) {
-                console.error(`⚠️ AI Generation Error for ${lead.name}:`, aiErr.message);
-            }
-            
-            if (!messageText || messageText.trim().length === 0) {
-                console.log(`⚠️ Message create nahi ho paya for ${lead.name}`);
-                try { await updateCell(lead.rowIndex, 'F', 'Failed'); } catch (e) {}
-                continue;
-            }
+                // Avoid duplicates within this batch.
+                if (processedNumbers.has(cleanedDigits)) {
+                    console.warn(
+                        `⏭️ Duplicate number skipped: ${lead.name}`
+                    );
 
-            console.log(`💬 Professional Message Generated for ${lead.name}:\n---\n${messageText}\n---`);
-
-            // 4. Safe Human-like Typing Indicator
-            try {
-                const chat = await client.getChatById(targetJid);
-                if (chat && typeof chat.sendStateTyping === 'function') {
-                    await chat.sendStateTyping();
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    if (typeof chat.clearState === 'function') {
-                        await chat.clearState();
-                    }
+                    skippedCount++;
+                    continue;
                 }
-            } catch (typingErr) {
-                // Ignore typing errors to ensure delivery continues smoothly
-            }
 
-            // 5. Message Delivery with Single Safe Retry
-            let delivered = false;
-            let attempts = 0;
-            while (!delivered && attempts < 2) {
-                attempts++;
+                processedNumbers.add(cleanedDigits);
+
+                // 2. Verify WhatsApp registration.
+                let numberId;
+
                 try {
-                    await client.sendMessage(targetJid, messageText.trim());
-                    delivered = true;
-                    console.log(`✅ Message successfully delivered to ${lead.name} (${lead.number})`);
+                    numberId = await client.getNumberId(
+                        cleanedDigits
+                    );
+                } catch (error) {
+                    console.warn(
+                        `⚠️ Number verification failed for ${lead.name}:`,
+                        error.message || error
+                    );
 
-                    // Google Sheet Update
-                    try {
-                        await updateCell(lead.rowIndex, 'F', 'Sent');
-                        await updateCell(lead.rowIndex, 'G', todayDateIST);
-                        await updateCell(lead.rowIndex, 'I', 'Initial Outreach');
-                    } catch (sheetErr) {
-                        console.error('⚠️ Sheet update warning:', sheetErr.message);
+                    // Leave status unchanged for a later attempt.
+                    skippedCount++;
+                    continue;
+                }
+
+                if (!numberId || !numberId._serialized) {
+                    console.warn(
+                        `❌ WhatsApp account nahi mila: ${lead.name}`
+                    );
+
+                    await updateCell(
+                        lead.rowIndex,
+                        'F',
+                        'Invalid Number'
+                    );
+
+                    skippedCount++;
+                    continue;
+                }
+
+                const targetJid = numberId._serialized;
+
+                // 3. Generate message.
+                let messageText;
+
+                try {
+                    messageText = await generateMessage(
+                        lead.name,
+                        lead.niche,
+                        false,
+                        '',
+                        'new'
+                    );
+                } catch (error) {
+                    console.error(
+                        `⚠️ AI generation failed for ${lead.name}:`,
+                        error.message || error
+                    );
+                }
+
+                if (
+                    typeof messageText !== 'string' ||
+                    !messageText.trim()
+                ) {
+                    console.warn(
+                        `⚠️ Empty/invalid message: ${lead.name}`
+                    );
+
+                    await updateCell(
+                        lead.rowIndex,
+                        'F',
+                        'Failed'
+                    );
+
+                    skippedCount++;
+                    continue;
+                }
+
+                messageText = messageText.trim();
+
+                // Pace send attempts, including uncertain failures.
+                if (previousSendAttempt) {
+                    const delayMs = getRandomDelay();
+
+                    console.log(
+                        `🕒 Next send attempt in ` +
+                        `${Math.round(delayMs / 1000)} seconds.`
+                    );
+
+                    await sleep(delayMs);
+                }
+
+                // 4. Optional typing indicator.
+                let chat;
+
+                try {
+                    chat = await client.getChatById(targetJid);
+
+                    if (
+                        chat &&
+                        typeof chat.sendStateTyping === 'function'
+                    ) {
+                        await chat.sendStateTyping();
+                        await sleep(3000);
                     }
-
-                    // Anti-Ban Delay between messages (Aakhiri message ke baad wait nahi karega)
-                    if (i < leadsToProcess.length - 1) {
-                        const delayMs = getRandomDelay();
-                        console.log(`🕒 Anti-Ban: Agle message ke liye ${(delayMs / 1000).toFixed(0)} seconds wait kar rahe hain...`);
-                        await new Promise(resolve => setTimeout(resolve, delayMs));
-                    }
-
-                } catch (sendError) {
-                    console.error(`⚠️ [Attempt ${attempts}/2] Delivery issue for ${lead.name}:`, sendError.message || sendError);
-                    if (attempts >= 2) {
-                        try { await updateCell(lead.rowIndex, 'F', 'Failed'); } catch (e) {}
-                    } else {
-                        await new Promise(res => setTimeout(res, 5000)); // 5s wait before single retry
+                } catch (error) {
+                    console.warn(
+                        'ℹ️ Typing indicator unavailable; continuing.'
+                    );
+                } finally {
+                    if (
+                        chat &&
+                        typeof chat.clearState === 'function'
+                    ) {
+                        try {
+                            await chat.clearState();
+                        } catch {
+                            // Typing indicator is optional.
+                        }
                     }
                 }
+
+                // 5. Submit message once.
+                // A rejected request may still have sent the message.
+                // Do not blindly retry an ambiguous send failure.
+                previousSendAttempt = true;
+
+                try {
+                    await client.sendMessage(
+                        targetJid,
+                        messageText
+                    );
+                } catch (error) {
+                    reviewCount++;
+
+                    console.error(
+                        `⚠️ Send result uncertain for ${lead.name}:`,
+                        error.message || error
+                    );
+
+                    await updateCell(
+                        lead.rowIndex,
+                        'F',
+                        'Needs Review'
+                    );
+
+                    console.warn(
+                        '👉 Chat check kiye bina is lead ko ' +
+                        'dobara Pending mat karein.'
+                    );
+
+                    continue;
+                }
+
+                sentCount++;
+
+                console.log(
+                    `✅ Message send request successful: ${lead.name}. ` +
+                    'Recipient delivery is not yet confirmed.'
+                );
+
+                // 6. Save tracking data.
+                // Existing sheet.js catches its own write errors.
+                // Check Sheet logs to confirm these updates succeeded.
+                await updateCell(
+                    lead.rowIndex,
+                    'F',
+                    'Sent'
+                );
+
+                await updateCell(
+                    lead.rowIndex,
+                    'G',
+                    getTodayISTDate()
+                );
+
+                await updateCell(
+                    lead.rowIndex,
+                    'I',
+                    'Initial Outreach'
+                );
+
+            } catch (error) {
+                console.error(
+                    `❌ Lead processing error for ${lead.name}:`,
+                    error.message || error
+                );
+
+                // Stop this batch on an unexpected error.
+                throw error;
             }
         }
-        
-        console.log('\n🎉 Outreach batch safaltapoorvak complete hua!');
 
-    } catch (err) {
-        console.error('❌ Critical error in sendOutreachMessages:', err.message || err);
+        console.log('\n==================================================');
+        console.log('📋 Outreach batch processing finished.');
+        console.log(`✅ Successful send requests: ${sentCount}`);
+        console.log(`⏭️ Skipped/unsent leads: ${skippedCount}`);
+        console.log(`🔎 Needs manual review: ${reviewCount}`);
+        console.log('==================================================\n');
+
+    } catch (error) {
+        console.error(
+            '❌ Outreach batch stopped:',
+            error.message || error
+        );
+
+        throw error;
     }
 }
 

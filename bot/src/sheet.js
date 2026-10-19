@@ -6,96 +6,46 @@ const { google } = require('googleapis');
 
 require('dotenv').config();
 
-// Local credentials file fallback
-const credentialsPath = path.resolve(
-    __dirname,
-    '../credentials.json'
-);
-
-// Google service-account credentials loader
 function loadGoogleCredentials() {
-    let credentials;
+    const raw = process.env.GOOGLE_CREDENTIALS_JSON;
 
-    const credentialsJSON =
-        process.env.GOOGLE_CREDENTIALS_JSON;
-
-    if (credentialsJSON && credentialsJSON.trim()) {
-        try {
-            credentials = JSON.parse(credentialsJSON);
-        } catch {
-            throw new Error(
-                'GOOGLE_CREDENTIALS_JSON valid JSON nahi hai. ' +
-                'Downloaded JSON file ka complete content paste karein.'
-            );
-        }
-
-        console.log(
-            '🔑 Google credentials source: Railway variable'
-        );
-    } else {
-        if (!fs.existsSync(credentialsPath)) {
-            throw new Error(
-                'Google credentials missing. ' +
-                'GOOGLE_CREDENTIALS_JSON set karein ' +
-                'ya credentials.json provide karein.'
-            );
-        }
-
-        try {
-            credentials = JSON.parse(
-                fs.readFileSync(credentialsPath, 'utf8')
-            );
-        } catch {
-            throw new Error(
-                'credentials.json read/parse nahi ho pa raha.'
-            );
-        }
-
-        console.log(
-            '🔑 Google credentials source: credentials.json'
-        );
-    }
+    const credentials = JSON.parse(
+        raw && raw.trim()
+            ? raw
+            : fs.readFileSync(
+                path.resolve(__dirname, '../credentials.json'),
+                'utf8'
+            )
+    );
 
     if (
-        !credentials ||
         credentials.type !== 'service_account' ||
         typeof credentials.client_email !== 'string' ||
-        !credentials.client_email.trim() ||
         typeof credentials.private_key !== 'string'
     ) {
-        throw new Error(
-            'Valid service-account JSON required. ' +
-            'type, client_email aur private_key check karein.'
-        );
+        throw new Error('Valid Google service-account JSON required.');
     }
 
-    credentials.client_email =
-        credentials.client_email.trim();
+    credentials.client_email = credentials.client_email.trim();
 
-    // Handle actual newlines and escaped newlines.
     credentials.private_key = credentials.private_key
         .replace(/\\r\\n/g, '\n')
         .replace(/\\n/g, '\n')
         .replace(/\r\n/g, '\n')
         .trim() + '\n';
 
-    // Validate private-key format without logging the secret.
-    try {
-        const key = crypto.createPrivateKey(
-            credentials.private_key
-        );
+    const key = crypto.createPrivateKey(credentials.private_key);
 
-        if (key.asymmetricKeyType !== 'rsa') {
-            throw new Error('RSA private key required.');
-        }
-    } catch {
-        throw new Error(
-            'Google private_key invalid ya incomplete hai. ' +
-            'Original downloaded JSON ka complete content use karein.'
-        );
+    if (key.asymmetricKeyType !== 'rsa') {
+        throw new Error('Google credentials require an RSA private key.');
     }
 
-    // This checks format, not whether the key is active at Google.
+    console.log(
+        `🔑 Google credentials source: ${
+            raw && raw.trim() ? 'Railway variable' : 'credentials.json'
+        }`
+    );
+
     return credentials;
 }
 
@@ -104,27 +54,39 @@ const SPREADSHEET_ID = String(
 ).trim();
 
 if (!SPREADSHEET_ID) {
-    throw new Error(
-        'SPREADSHEET_ID missing hai. Railway Variables mein set karein.'
-    );
+    throw new Error('SPREADSHEET_ID missing.');
 }
 
 const auth = new google.auth.GoogleAuth({
     credentials: loadGoogleCredentials(),
-    scopes: [
-        'https://www.googleapis.com/auth/spreadsheets'
-    ]
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
 });
 
-const sheets = google.sheets({
-    version: 'v4',
-    auth
-});
+const sheets = google.sheets({ version: 'v4', auth });
 
-const SHEET_NAME = 'Sheet1';
-const LEADS_RANGE = `${SHEET_NAME}!A2:J`;
+// All existing column mappings are preserved.
+const SHEET = "'Sheet1'";
 
-// IST date: YYYY-MM-DD
+// Serialize operations within this Node process.
+// This is not a cross-process/database transaction.
+let operationQueue = Promise.resolve();
+
+function runSheetOperation(operation, task) {
+    const result = operationQueue.then(task);
+
+    operationQueue = result.catch(() => {});
+
+    return result.catch(error => {
+        console.error(
+            `❌ Sheet Error (${operation}):`,
+            error.message || 'Unknown error'
+        );
+
+        // Propagate the error to the caller.
+        throw error;
+    });
+}
+
 function getTodayISTDate() {
     const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Kolkata',
@@ -133,302 +95,254 @@ function getTodayISTDate() {
         day: '2-digit'
     }).formatToParts(new Date());
 
-    const values = {};
-
-    for (const part of parts) {
-        values[part.type] = part.value;
-    }
+    const values = Object.fromEntries(
+        parts.map(part => [part.type, part.value])
+    );
 
     return `${values.year}-${values.month}-${values.day}`;
 }
 
-// Number_1, Number 1, number-1 -> number1
-function normalizeBotId(val) {
-    return String(val || '')
+function normalizeBotId(value) {
+    return String(value || '')
         .trim()
         .toLowerCase()
         .replace(/[\s_-]+/g, '');
 }
 
-// Indian phone-number normalization
-function cleanPhoneNumber(rawVal) {
-    if (!rawVal) return '';
+function cleanPhoneNumber(value) {
+    if (value === undefined || value === null) return '';
 
-    let cleaned = String(rawVal)
+    let number = String(value)
         .split('.')[0]
         .replace(/\D/g, '');
 
-    if (cleaned.length === 10) {
-        cleaned = '91' + cleaned;
+    if (number.length === 10) {
+        number = '91' + number;
     } else if (
-        cleaned.length === 12 &&
-        cleaned.startsWith('91')
+        number.length === 11 &&
+        number.startsWith('0')
     ) {
-        // Already normalized.
-    } else if (
-        cleaned.length === 11 &&
-        cleaned.startsWith('0')
-    ) {
-        cleaned = '91' + cleaned.substring(1);
+        number = '91' + number.slice(1);
     }
 
-    return cleaned;
+    return number;
 }
 
-// Consistent error reporting without printing credentials.
-function logSheetError(operation, error) {
-    const message = error && error.message
-        ? error.message
-        : 'Unknown Google Sheets error';
+function normalizeStatus(value) {
+    return String(value || '').trim().toLowerCase();
+}
 
-    console.error(
-        `❌ Sheet Error (${operation}):`,
-        message
+function isPausedStatus(value) {
+    return [
+        'manual',
+        'in-discussion',
+        'dead',
+        'needs review'
+    ].includes(normalizeStatus(value));
+}
+
+function isAssignedToThisBot(value) {
+    const assigned = normalizeBotId(value);
+    const target = normalizeBotId(
+        process.env.ASSIGNED_BOT || 'Number_1'
     );
 
-    if (
-        /invalid_grant|invalid jwt signature/i.test(message)
-    ) {
-        console.error(
-            '👉 GOOGLE_CREDENTIALS_JSON mein same service account ' +
-            'ki matching, active key use karein. ' +
-            'Deleted/disabled key ko code se repair nahi kiya ja sakta.'
-        );
-    }
+    return assigned === '' || assigned === target;
 }
 
-/**
- * Pending outreach leads.
- * Existing assignment and status rules preserved.
- */
+function rowToLead(row, index) {
+    return {
+        rowIndex: index + 2,
+        assignedBot: row[0] || '',
+        dateAdded: row[1] || '',
+        name: row[2] || "Sir/Ma'am",
+        number: cleanPhoneNumber(row[3]),
+        niche: row[4] || 'Business',
+        status: row[5] || '',
+        lastContactDate: row[6] || '',
+        followupStage: row[8] || ''
+    };
+}
+
+async function readRows() {
+    const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET}!A2:J`
+    });
+
+    return result.data.values || [];
+}
+
+// Call this during startup: reads only, sends no WhatsApp messages.
+async function verifySheetConnection() {
+    return runSheetOperation('verifySheetConnection', async () => {
+        const rows = await readRows();
+
+        console.log(
+            `✅ Google Sheets READ verified: ${rows.length} rows.`
+        );
+
+        return true;
+    });
+}
+
 async function getPendingLeads() {
-    try {
-        const res = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range: LEADS_RANGE
-        });
+    return runSheetOperation('getPendingLeads', async () => {
+        const rows = await readRows();
 
-        const rows = res.data.values || [];
-        const leads = [];
-
-        const targetBot = normalizeBotId(
-            process.env.ASSIGNED_BOT || 'Number_1'
-        );
-
-        console.log(
-            `📋 Google Sheet Total Rows fetched: ${rows.length}. ` +
-            `Target Bot ID: '${targetBot}'`
-        );
-
-        rows.forEach((row, index) => {
-            const assignedBot = normalizeBotId(row[0]);
-
-            const rawStatus = String(row[5] || '')
-                .trim()
-                .toLowerCase();
-
-            const formattedNumber = cleanPhoneNumber(row[3]);
-
-            const isBotMatch =
-                assignedBot === targetBot ||
-                assignedBot === '';
-
-            const isStatusMatch =
-                rawStatus === '' ||
-                rawStatus === 'pending';
-
-            if (
-                isBotMatch &&
-                isStatusMatch &&
-                formattedNumber.length >= 12
-            ) {
-                leads.push({
-                    rowIndex: index + 2,
-                    dateAdded: row[1] || '',
-                    name: row[2] || "Sir/Ma'am",
-                    number: formattedNumber,
-                    niche: row[4] || 'Business',
-                    status: row[5] || 'Pending'
-                });
-            }
-        });
+        const leads = rows
+            .map(rowToLead)
+            .filter(lead => (
+                isAssignedToThisBot(lead.assignedBot) &&
+                ['', 'pending'].includes(
+                    normalizeStatus(lead.status)
+                ) &&
+                /^91[6-9]\d{9}$/.test(lead.number)
+            ));
 
         console.log(
-            `🎯 Matched Valid Pending Leads: ${leads.length}`
+            `📋 Sheet rows: ${rows.length} | ` +
+            `Eligible pending leads: ${leads.length}`
         );
 
         return leads;
-    } catch (error) {
-        logSheetError('getPendingLeads', error);
-        return [];
-    }
+    });
 }
 
-/**
- * Follow-up candidates.
- * Day 3, 7, 14, 21 timing remains the scheduler's responsibility.
- */
 async function getLeadsForFollowup() {
-    try {
-        const res = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range: LEADS_RANGE
-        });
+    return runSheetOperation('getLeadsForFollowup', async () => {
+        const rows = await readRows();
 
-        const rows = res.data.values || [];
-        const followups = [];
-
-        const targetBot = normalizeBotId(
-            process.env.ASSIGNED_BOT || 'Number_1'
-        );
-
-        rows.forEach((row, index) => {
-            const assignedBot = normalizeBotId(row[0]);
-
-            const messageStatus = String(row[5] || '').trim();
-            const lastContactDate = String(row[6] || '').trim();
-            const followupStage = String(row[8] || '').trim();
-
-            const formattedNumber = cleanPhoneNumber(row[3]);
-
-            const isAssigned =
-                assignedBot === targetBot ||
-                assignedBot === '';
-
-            const isEligibleStatus =
-                messageStatus === 'Sent' ||
-                messageStatus === 'Follow-up Sent';
-
-            const isNotInterrupted =
-                messageStatus !== 'Replied' &&
-                messageStatus !== 'In-Discussion' &&
-                messageStatus !== 'Dead';
-
-            if (
-                isAssigned &&
-                isEligibleStatus &&
-                isNotInterrupted &&
-                lastContactDate &&
-                formattedNumber.length >= 12
-            ) {
-                followups.push({
-                    rowIndex: index + 2,
-                    name: row[2] || "Sir/Ma'am",
-                    number: formattedNumber,
-                    niche: row[4] || 'Business',
-                    status: messageStatus,
-                    lastContactDate,
-                    followupStage
-                });
-            }
-        });
-
-        return followups;
-    } catch (error) {
-        logSheetError('getLeadsForFollowup', error);
-        return [];
-    }
+        return rows
+            .map(rowToLead)
+            .filter(lead => (
+                isAssignedToThisBot(lead.assignedBot) &&
+                ['sent', 'follow-up sent'].includes(
+                    normalizeStatus(lead.status)
+                ) &&
+                Boolean(lead.lastContactDate) &&
+                /^91[6-9]\d{9}$/.test(lead.number)
+            ));
+    });
 }
 
-/**
- * Find a lead by incoming phone number.
- */
-async function getLeadByNumber(mobileNumber) {
-    try {
-        const cleanTarget = cleanPhoneNumber(mobileNumber);
+async function getLeadByNumber(value) {
+    const target = cleanPhoneNumber(value);
 
-        // Prevent empty/short input from matching unrelated rows.
-        if (cleanTarget.length < 10) {
-            return null;
+    if (!/^\d{10,15}$/.test(target)) return null;
+
+    return runSheetOperation('getLeadByNumber', async () => {
+        const rows = await readRows();
+
+        const matches = rows
+            .map(rowToLead)
+            .filter(lead => (
+                lead.number === target &&
+                isAssignedToThisBot(lead.assignedBot)
+            ));
+
+        if (matches.length > 1) {
+            throw new Error(
+                'Duplicate eligible Sheet rows for this phone number. ' +
+                'Resolve duplicates before sending.'
+            );
         }
 
-        const res = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range: LEADS_RANGE
-        });
-
-        const rows = res.data.values || [];
-
-        for (let i = 0; i < rows.length; i++) {
-            const rowNumber = cleanPhoneNumber(rows[i][3]);
-
-            // Both numbers have already been normalized.
-            if (rowNumber === cleanTarget) {
-                return {
-                    rowIndex: i + 2,
-                    name: rows[i][2] || "Sir/Ma'am",
-                    number: rowNumber,
-                    niche: rows[i][4] || 'Business',
-                    status: rows[i][5] || ''
-                };
-            }
-        }
-
-        return null;
-    } catch (error) {
-        logSheetError('getLeadByNumber', error);
-        return null;
-    }
+        // null means no matching lead. API failures throw.
+        return matches[0] || null;
+    });
 }
 
-/**
- * Update a specific cell.
- */
 async function updateCell(rowIndex, columnLetter, value) {
-    try {
-        const row = Number(rowIndex);
+    const row = Number(rowIndex);
+    const column = String(columnLetter || '').trim().toUpperCase();
 
-        const column = String(columnLetter || '')
-            .trim()
-            .toUpperCase();
+    if (
+        !Number.isInteger(row) ||
+        row < 2 ||
+        !/^[A-Z]+$/.test(column)
+    ) {
+        throw new Error('Invalid Sheet row or column.');
+    }
 
-        if (
-            !Number.isInteger(row) ||
-            row < 2 ||
-            !/^[A-Z]+$/.test(column)
-        ) {
-            throw new Error('Invalid row index or column letter.');
+    return runSheetOperation('updateCell', async () => {
+        if (column === 'F') {
+            const response = await sheets.spreadsheets.values.get({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${SHEET}!F${row}`
+            });
+
+            const current = normalizeStatus(
+                response.data.values?.[0]?.[0]
+            );
+
+            const next = normalizeStatus(value);
+
+            const automatedStatuses = [
+                'pending',
+                'sent',
+                'follow-up sent',
+                'replied',
+                'failed',
+                'invalid number'
+            ];
+
+            // Automated updates must not clear an existing pause.
+            if (
+                isPausedStatus(current) &&
+                automatedStatuses.includes(next)
+            ) {
+                console.log(
+                    `🔒 Row ${row}: preserved '${current}' status.`
+                );
+                return false;
+            }
+
+            // A send completion must not overwrite an incoming reply.
+            if (
+                current === 'replied' &&
+                [
+                    'sent',
+                    'follow-up sent',
+                    'dead',
+                    'failed',
+                    'invalid number'
+                ].includes(next)
+            ) {
+                console.log(
+                    `🔒 Row ${row}: preserved 'Replied' status.`
+                );
+                return false;
+            }
         }
 
         await sheets.spreadsheets.values.update({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${SHEET_NAME}!${column}${row}`,
-            valueInputOption: 'USER_ENTERED',
+            range: `${SHEET}!${column}${row}`,
+            valueInputOption: 'RAW',
             requestBody: {
-                values: [[value]]
+                values: [[value ?? '']]
             }
         });
 
         console.log(
-            `✅ Sheet Row ${row} [Col ${column}] ` +
-            `updated to: '${value}'`
+            `✅ Sheet write verified: row ${row}, column ${column}`
         );
-    } catch (error) {
-        logSheetError('updateCell', error);
-    }
+
+        return true;
+    });
 }
 
-/**
- * Update a cell by the lead's phone number.
- */
 async function updateCellByNumber(
     mobileNumber,
     columnLetter,
     value
 ) {
-    try {
-        const lead = await getLeadByNumber(mobileNumber);
+    const lead = await getLeadByNumber(mobileNumber);
 
-        if (lead) {
-            await updateCell(
-                lead.rowIndex,
-                columnLetter,
-                value
-            );
-        }
-    } catch (error) {
-        logSheetError('updateCellByNumber', error);
-    }
+    if (!lead) return false;
+
+    return updateCell(lead.rowIndex, columnLetter, value);
 }
 
 module.exports = {
@@ -438,5 +352,7 @@ module.exports = {
     updateCell,
     updateCellByNumber,
     getTodayISTDate,
-    cleanPhoneNumber
+    cleanPhoneNumber,
+    verifySheetConnection,
+    isPausedStatus
 };

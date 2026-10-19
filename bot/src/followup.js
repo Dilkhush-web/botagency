@@ -1,189 +1,346 @@
 // src/followup.js
 const { generateFollowupMessage } = require('./gemini');
-const { updateCell, getLeadsForFollowup, getLeadByNumber } = require('./sheet');
 
-// Anti-Ban Delay: 60s se 150s ke beech ka random human gap
+const {
+    updateCell,
+    getLeadsForFollowup,
+    getLeadByNumber,
+    getTodayISTDate,
+    cleanPhoneNumber
+} = require('./sheet');
+
+let isFollowupRunning = false;
+
 function getRandomFollowupDelay() {
-    const min = 60000;  // 1 min
-    const max = 150000; // 2.5 min
+    const min = 60000;
+    const max = 150000;
+
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Real Indian Timezone (IST) Date Generator (YYYY-MM-DD)
-function getTodayISTDate() {
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Kolkata',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-    }).format(new Date());
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Do dates ke beech ke din nikalna (Accurate IST Midnight diff)
-function getDaysDifference(pastDateStr) {
-    if (!pastDateStr) return 0;
-    try {
-        const past = new Date(pastDateStr);
-        const today = new Date(getTodayISTDate());
+// Accept only an actual YYYY-MM-DD calendar date.
+function parseDate(dateString) {
+    const value = String(dateString || '').trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 
-        past.setHours(0, 0, 0, 0);
-        today.setHours(0, 0, 0, 0);
+    if (!match) return null;
 
-        const diffTime = today.getTime() - past.getTime();
-        return Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    } catch (e) {
-        return 0;
+    const timestamp = Date.UTC(
+        Number(match[1]),
+        Number(match[2]) - 1,
+        Number(match[3])
+    );
+
+    if (
+        new Date(timestamp).toISOString().slice(0, 10) !== value
+    ) {
+        return null;
     }
+
+    return timestamp;
 }
 
-// Clean and format phone number for WhatsApp Web JID
-function cleanPhoneNumber(rawNumber) {
-    let cleaned = String(rawNumber).split('.')[0].replace(/\D/g, '');
-    if (cleaned.length === 10) {
-        cleaned = '91' + cleaned;
-    } else if (cleaned.length === 11 && cleaned.startsWith('0')) {
-        cleaned = '91' + cleaned.substring(1);
-    }
-    return cleaned;
+function getDaysDifference(pastDateString) {
+    const past = parseDate(pastDateString);
+    const today = parseDate(getTodayISTDate());
+
+    if (past === null || today === null) return null;
+
+    return Math.floor((today - past) / 86400000);
 }
 
-/**
- * Runs the Multi-day Follow-up Pipeline with Human Takeover Protection
- * @param {import('whatsapp-web.js').Client} client 
- */
+function isEligibleStatus(status) {
+    const value = String(status || '').trim().toLowerCase();
+
+    return value === 'sent' || value === 'follow-up sent';
+}
+
+// G contains the last successful contact date.
+// Stage gaps produce Day 3, 7, 14, 21 when runs are on time.
+function getNextStage(lead) {
+    const current = String(lead.followupStage || '')
+        .trim()
+        .toLowerCase();
+
+    const stages = {
+        '': {
+            gap: 3,
+            aiStage: 'day3',
+            nextName: '1st Follow-up'
+        },
+        'initial outreach': {
+            gap: 3,
+            aiStage: 'day3',
+            nextName: '1st Follow-up'
+        },
+        '1st follow-up': {
+            gap: 4,
+            aiStage: 'day7',
+            nextName: '2nd Follow-up'
+        },
+        '2nd follow-up': {
+            gap: 7,
+            aiStage: 'day14',
+            nextName: '3rd Follow-up'
+        },
+        '3rd follow-up': {
+            gap: 7,
+            aiStage: 'day21',
+            nextName: 'Breakup Sent'
+        }
+    };
+
+    return stages[current] || null;
+}
+
 async function processFollowups(client) {
-    console.log('\n🔎 Follow-up engine: Google Sheet se eligible leads scan kar rahe hain...');
+    if (isFollowupRunning) {
+        console.log('ℹ️ Follow-up scan already running.');
+        return;
+    }
+
+    isFollowupRunning = true;
+
+    let sentCount = 0;
+    let previousSendAttempt = false;
 
     try {
+        console.log('\n🔎 Scanning Google Sheet for follow-ups...');
+
         const leads = await getLeadsForFollowup();
 
         if (!leads || leads.length === 0) {
-            console.log('✅ Follow-up ke liye koi eligible lead nahi mili.');
+            console.log(
+                'ℹ️ No follow-up candidates returned. ' +
+                'Check preceding logs for any Sheet errors.'
+            );
             return;
         }
 
-        console.log(`📋 Total ${leads.length} potential leads scan hui. Calculating days difference...`);
+        const processedNumbers = new Set();
 
-        const todayDateStr = getTodayISTDate();
+        for (const lead of leads) {
+            const stage = getNextStage(lead);
+            const daysPassed = getDaysDifference(
+                lead.lastContactDate
+            );
 
-        for (let i = 0; i < leads.length; i++) {
-            const lead = leads[i];
-            const daysPassed = getDaysDifference(lead.lastContactDate);
+            if (!stage) continue;
 
-            let stage = null;
-            let nextStageName = null;
-
-            // Follow-up Stage Decision Matrix: Day 3, 7, 14, 21
-            if (daysPassed >= 21 && lead.followupStage !== 'Dead' && lead.followupStage !== 'Breakup Sent') {
-                stage = 'day21';
-                nextStageName = 'Breakup Sent';
-            } else if (daysPassed >= 14 && (lead.followupStage === '2nd Follow-up' || lead.followupStage === '1st Follow-up' || !lead.followupStage)) {
-                stage = 'day14';
-                nextStageName = '3rd Follow-up';
-            } else if (daysPassed >= 7 && (lead.followupStage === '1st Follow-up' || !lead.followupStage)) {
-                stage = 'day7';
-                nextStageName = '2nd Follow-up';
-            } else if (daysPassed >= 3 && (!lead.followupStage || lead.followupStage === 'Initial Outreach')) {
-                stage = 'day3';
-                nextStageName = '1st Follow-up';
-            }
-
-            // Agar koi stage trigger nahi hoti toh skip karein
-            if (!stage) {
+            if (daysPassed === null) {
+                console.warn(
+                    `⚠️ Invalid date for ${lead.name}. ` +
+                    'Column G must contain YYYY-MM-DD.'
+                );
                 continue;
             }
 
-            const cleanDigits = cleanPhoneNumber(lead.number);
-            const targetJid = `${cleanDigits}@c.us`;
+            if (daysPassed < stage.gap) continue;
 
-            // 1. RE-VERIFY STATUS IN SHEET (Double-check)
-            const freshLead = await getLeadByNumber(cleanDigits);
-            if (freshLead && (freshLead.status === 'In-Discussion' || freshLead.status === 'Replied' || freshLead.status === 'Dead' || freshLead.status === 'Manual')) {
-                console.log(`🛑 Follow-up Skipped: Lead ${lead.name} is in '${freshLead.status}' status.`);
+            const number = cleanPhoneNumber(lead.number);
+
+            if (!/^91[6-9]\d{9}$/.test(number)) {
+                console.warn(
+                    `⚠️ Invalid Indian mobile number: ${lead.name}`
+                );
                 continue;
             }
 
-            // 2. CRITICAL HUMAN TAKEOVER INTERCEPT (Live Chat History Check)
-            try {
-                const chat = await client.getChatById(targetJid);
-                if (chat) {
-                    const messages = await chat.fetchMessages({ limit: 5 });
-                    const lastMsg = messages[messages.length - 1];
+            if (processedNumbers.has(number)) continue;
+            processedNumbers.add(number);
 
-                    // Agar aapne phone se manually kabhi bhi reply kiya tha
-                    if (lastMsg && lastMsg.fromMe && lead.followupStage !== 'Initial Outreach') {
-                        console.log(`🛑 Human Intervention Verified: Phone se lead ${lead.name} se baat ho chuki hai. Follow-up cancelled.`);
-                        await updateCell(lead.rowIndex, 'F', 'In-Discussion');
-                        continue;
-                    }
-                }
-            } catch (chatErr) {
-                // Ignore chat check error, proceed safely
-            }
+            // Do not proceed when the lead is unavailable or paused.
+            let freshLead = await getLeadByNumber(number);
 
-            console.log(`\n📌 Triggering [${stage}]: ${lead.name} (${cleanDigits}) | Days passed: ${daysPassed}`);
-
-            // 3. Generate Consultative Follow-up Message
-            const messageText = await generateFollowupMessage(lead.name, lead.niche, stage);
-
-            if (!messageText || messageText.trim().length === 0) {
-                console.log(`⚠️ AI ne follow-up message generate nahi kiya for ${lead.name}`);
+            if (
+                !freshLead ||
+                freshLead.rowIndex !== lead.rowIndex ||
+                !isEligibleStatus(freshLead.status)
+            ) {
+                console.log(
+                    `⏭️ Follow-up skipped: ${lead.name} ` +
+                    '(lead unavailable, changed, or paused).'
+                );
                 continue;
             }
+
+            let messageText;
+            let numberId;
 
             try {
-                // 4. WhatsApp registration check
-                if (typeof client.getNumberId === 'function') {
-                    const numberId = await client.getNumberId(cleanDigits);
-                    if (!numberId) {
-                        console.log(`❌ Number ${lead.number} WhatsApp par active nahi mila.`);
-                        await updateCell(lead.rowIndex, 'F', 'Invalid Number');
-                        continue;
+                numberId = await client.getNumberId(number);
+
+                if (!numberId || !numberId._serialized) {
+                    await updateCell(
+                        lead.rowIndex,
+                        'F',
+                        'Invalid Number'
+                    );
+                    continue;
+                }
+
+                messageText = await generateFollowupMessage(
+                    lead.name,
+                    lead.niche,
+                    stage.aiStage
+                );
+            } catch (error) {
+                console.error(
+                    `⚠️ Follow-up preparation failed: ${lead.name}`,
+                    error.message || error
+                );
+                continue;
+            }
+
+            if (
+                typeof messageText !== 'string' ||
+                !messageText.trim()
+            ) {
+                console.warn(
+                    `⚠️ Empty follow-up message: ${lead.name}`
+                );
+                continue;
+            }
+
+            if (previousSendAttempt) {
+                const delayMs = getRandomFollowupDelay();
+
+                console.log(
+                    `🕒 Next follow-up attempt in ` +
+                    `${Math.round(delayMs / 1000)} seconds.`
+                );
+
+                await sleep(delayMs);
+            }
+
+            const targetJid = numberId._serialized;
+            let chat;
+
+            try {
+                chat = await client.getChatById(targetJid);
+
+                if (
+                    chat &&
+                    typeof chat.sendStateTyping === 'function'
+                ) {
+                    await chat.sendStateTyping();
+                    await sleep(
+                        3000 + Math.floor(Math.random() * 3001)
+                    );
+                }
+            } catch {
+                // Optional typing indicator.
+            } finally {
+                if (
+                    chat &&
+                    typeof chat.clearState === 'function'
+                ) {
+                    try {
+                        await chat.clearState();
+                    } catch {
+                        // Optional typing indicator.
                     }
                 }
+            }
 
-                // 5. Human-like Typing Simulation
-                try {
-                    const chat = await client.getChatById(targetJid);
-                    if (chat && typeof chat.sendStateTyping === 'function') {
-                        await chat.sendStateTyping();
-                        const typingDuration = Math.floor(Math.random() * 3000) + 3000; // 3-6 sec typing
-                        await new Promise(resolve => setTimeout(resolve, typingDuration));
-                        if (typeof chat.clearState === 'function') {
-                            await chat.clearState();
-                        }
-                    }
-                } catch (typingErr) {}
+            // Recheck after generation and pacing delays.
+            freshLead = await getLeadByNumber(number);
 
-                // 6. Deliver Message
-                await client.sendMessage(targetJid, messageText.trim());
-                console.log(`✅ [${stage}] Follow-up Delivered to ${lead.name} (${cleanDigits})`);
+            if (
+                !freshLead ||
+                freshLead.rowIndex !== lead.rowIndex ||
+                !isEligibleStatus(freshLead.status)
+            ) {
+                console.log(
+                    `🛑 Follow-up cancelled: ${lead.name} ` +
+                    '(latest status is no longer eligible).'
+                );
+                continue;
+            }
 
-                // 7. Sheet Updates
-                if (stage === 'day21') {
-                    await updateCell(lead.rowIndex, 'F', 'Dead'); // Day 21 ke baad cycle close
-                } else {
-                    await updateCell(lead.rowIndex, 'F', 'Follow-up Sent');
-                }
-                await updateCell(lead.rowIndex, 'G', todayDateStr);
-                await updateCell(lead.rowIndex, 'I', nextStageName);
+            console.log(
+                `📌 ${stage.aiStage}: ${lead.name} | ` +
+                `${daysPassed} days since last contact`
+            );
 
-                // 8. Anti-Ban Delay before next lead
-                if (i < leads.length - 1) {
-                    const delayMs = getRandomFollowupDelay();
-                    console.log(`🕒 Anti-Ban: Agle follow-up ke liye ${(delayMs / 1000).toFixed(0)} seconds wait kar rahe hain...`);
-                    await new Promise(resolve => setTimeout(resolve, delayMs));
-                }
+            previousSendAttempt = true;
 
-            } catch (err) {
-                console.error(`❌ Follow-up delivery failed for ${lead.name}:`, err.message || err);
+            try {
+                await client.sendMessage(
+                    targetJid,
+                    messageText.trim()
+                );
+            } catch (error) {
+                console.error(
+                    `⚠️ Follow-up send result uncertain: ${lead.name}`,
+                    error.message || error
+                );
+
+                await updateCell(
+                    lead.rowIndex,
+                    'F',
+                    'Needs Review'
+                );
+
+                // No automatic retry: the message may have been sent.
+                continue;
+            }
+
+            sentCount++;
+
+            console.log(
+                `✅ Follow-up send request successful: ${lead.name}`
+            );
+
+            // Save date and stage first.
+            await updateCell(
+                lead.rowIndex,
+                'G',
+                getTodayISTDate()
+            );
+
+            await updateCell(
+                lead.rowIndex,
+                'I',
+                stage.nextName
+            );
+
+            // Avoid knowingly overwriting a reply/manual takeover
+            // that occurred while sending.
+            const afterSend = await getLeadByNumber(number);
+
+            if (
+                afterSend &&
+                afterSend.rowIndex === lead.rowIndex &&
+                isEligibleStatus(afterSend.status)
+            ) {
+                await updateCell(
+                    lead.rowIndex,
+                    'F',
+                    stage.aiStage === 'day21'
+                        ? 'Dead'
+                        : 'Follow-up Sent'
+                );
             }
         }
 
-        console.log('\n🎉 Follow-up batch check complete hua!');
-
+        console.log(
+            `\n📋 Follow-up scan finished. ` +
+            `Successful send requests: ${sentCount}`
+        );
     } catch (error) {
-        console.error('❌ Critical error in processFollowups:', error.message || error);
+        console.error(
+            '❌ Follow-up processing stopped:',
+            error.message || error
+        );
+
+        throw error;
+    } finally {
+        isFollowupRunning = false;
     }
 }
 
