@@ -6,8 +6,11 @@ const {
     cleanPhoneNumber
 } = require('./sheet');
 
-// One queue per lead.
 const pendingReplies = new Map();
+
+function errorDetails(error) {
+    return error?.stack || error?.message || String(error);
+}
 
 function getRealisticHumanDelay() {
     const minSecs = 90;
@@ -36,7 +39,6 @@ function isPaused(lead) {
     ].includes(status);
 }
 
-// Used by the listener when manual takeover is detected.
 function cancelPendingReply(number) {
     const key = cleanPhoneNumber(number);
     const item = pendingReplies.get(key);
@@ -61,7 +63,12 @@ function scheduleReply(client, number, item) {
     );
 
     item.timer = setTimeout(() => {
-        void executeReply(client, number, item);
+        executeReply(client, number, item).catch(error => {
+            console.error(
+                '❌ Unexpected reply task error:',
+                errorDetails(error)
+            );
+        });
     }, delayMs);
 }
 
@@ -71,16 +78,16 @@ async function handleIncomingMessage(client, message, lead) {
             !message ||
             message.fromMe ||
             message.isStatus ||
-            !lead
+            !lead ||
+            isPaused(lead)
         ) {
             return;
         }
 
-        if (isPaused(lead)) return;
-
-        // The listener must resolve the sender and find the correct lead.
-        // Do not treat an @lid identifier as a phone number.
+        // Use the matched lead's phone number for Sheet lookup.
         const number = cleanPhoneNumber(lead.number);
+
+        // Preserve the actual WhatsApp chat ID.
         const chatId = message.from;
         const text = String(message.body || '').trim();
 
@@ -109,15 +116,13 @@ async function handleIncomingMessage(client, message, lead) {
 
         console.log(`📩 Inquiry buffered: ${lead.name}`);
 
-        // If generation is running, it will detect the new revision
-        // and queue a fresh response with the combined messages.
         if (!item.running) {
             scheduleReply(client, number, item);
         }
     } catch (error) {
         console.error(
             '❌ Incoming reply handler error:',
-            error.message || error
+            errorDetails(error)
         );
     }
 }
@@ -139,34 +144,50 @@ async function executeReply(client, number, item) {
 
     let chat = null;
     let sendAttempted = false;
+    let phase = 'initial checks';
 
     const isCurrent = () => (
         pendingReplies.get(number) === item &&
         !item.cancelled
     );
 
+    const hasNewMessages = () => item.revision !== revision;
+
     try {
         if (!conversation.trim()) return;
 
-        // Fail closed if the lead cannot be read.
-        // Current sheet.js returns null for both missing leads and errors.
+        phase = 'reading lead status';
+
         let latestLead = await getLeadByNumber(number);
 
         if (!isCurrent()) return;
 
         if (!latestLead || isPaused(latestLead)) {
             console.log(
-                '🛑 Reply skipped: lead unavailable or automation paused.'
+                '🛑 Reply skipped: lead missing or automation paused.'
             );
 
             cancelPendingReply(number);
             return;
         }
 
-        // A reply should stop outreach follow-ups.
-        await updateCell(latestLead.rowIndex, 'F', 'Replied');
+        phase = 'saving Replied status';
 
-        if (!isCurrent() || item.revision !== revision) return;
+        const updated = await updateCell(
+            latestLead.rowIndex,
+            'F',
+            'Replied'
+        );
+
+        // Latest sheet.js returns false when it preserves a pause.
+        if (updated === false) {
+            cancelPendingReply(number);
+            return;
+        }
+
+        if (!isCurrent() || hasNewMessages()) return;
+
+        phase = 'generating AI response';
 
         console.log(
             `🤖 Generating response for ${latestLead.name}...`
@@ -187,38 +208,64 @@ async function executeReply(client, number, item) {
             return;
         }
 
-        if (!isCurrent() || item.revision !== revision) return;
+        if (!isCurrent() || hasNewMessages()) return;
 
-        // Preserve the actual incoming chat ID, including @lid.
-        chat = await client.getChatById(item.chatId);
+        // Chat lookup, read receipt and typing are ALL optional.
+        // Their failure must not prevent the actual send attempt.
+        phase = 'optional chat indicators';
 
         try {
-            if (typeof chat.sendSeen === 'function') {
+            chat = await client.getChatById(item.chatId);
+
+            if (!isCurrent() || hasNewMessages()) return;
+
+            if (
+                chat &&
+                typeof chat.sendSeen === 'function'
+            ) {
                 await chat.sendSeen();
             }
 
             await sleep(1200);
 
-            if (typeof chat.sendStateTyping === 'function') {
-                await chat.sendStateTyping();
-            }
+            if (!isCurrent() || hasNewMessages()) return;
 
-            await sleep(4000 + Math.floor(Math.random() * 3001));
-        } catch {
-            console.log('ℹ️ Optional typing indicator unavailable.');
+            if (
+                chat &&
+                typeof chat.sendStateTyping === 'function'
+            ) {
+                await chat.sendStateTyping();
+
+                await sleep(
+                    4000 + Math.floor(Math.random() * 3001)
+                );
+            }
+        } catch (error) {
+            console.warn(
+                'ℹ️ Optional chat/typing step failed; ' +
+                'continuing to reply:',
+                errorDetails(error)
+            );
         } finally {
-            if (chat && typeof chat.clearState === 'function') {
+            if (
+                chat &&
+                typeof chat.clearState === 'function'
+            ) {
                 try {
                     await chat.clearState();
-                } catch {
-                    // Optional UI indicator.
+                } catch (error) {
+                    console.warn(
+                        'ℹ️ Could not clear typing indicator:',
+                        error?.message || String(error)
+                    );
                 }
             }
         }
 
-        if (!isCurrent() || item.revision !== revision) return;
+        if (!isCurrent() || hasNewMessages()) return;
 
-        // Recheck manual takeover after AI generation and typing delay.
+        phase = 'final lead status check';
+
         latestLead = await getLeadByNumber(number);
 
         if (!isCurrent()) return;
@@ -228,45 +275,55 @@ async function executeReply(client, number, item) {
             return;
         }
 
-        if (item.revision !== revision) return;
+        if (hasNewMessages()) return;
 
+        phase = 'sending WhatsApp reply';
         sendAttempted = true;
 
+        // Keep using client.sendMessage so listener tracking works.
         await client.sendMessage(
             item.chatId,
             replyText.trim()
         );
 
-        // Remove only the messages included in this response.
         item.messages.splice(0, messageCount);
 
         console.log(
             `✅ Reply send request successful: ${latestLead.name}`
         );
 
-        // Keep status Replied so future incoming messages can be answered.
-        // In-Discussion / Manual must represent an actual human takeover.
-        // Do not overwrite a takeover status after sending.
-
+        // Keep Replied status.
+        // Do not overwrite a concurrent manual takeover after sending.
     } catch (error) {
         console.error(
-            '❌ Automated reply error:',
-            error.message || error
+            `❌ Automated reply error during "${phase}":`,
+            errorDetails(error)
         );
 
         if (sendAttempted) {
-            // The message might have been sent despite the error.
-            // Avoid automatically sending it again.
+            // The wrapper or WhatsApp may have rejected the send.
+            // Treat the outcome conservatively; never blindly retry.
             item.cancelled = true;
 
-            await updateCell(
-                item.lead.rowIndex,
-                'F',
-                'Needs Review'
-            );
+            try {
+                const latestLead = await getLeadByNumber(number);
+
+                if (latestLead && !isPaused(latestLead)) {
+                    await updateCell(
+                        latestLead.rowIndex,
+                        'F',
+                        'Needs Review'
+                    );
+                }
+            } catch (sheetError) {
+                console.error(
+                    '❌ Could not save review status:',
+                    errorDetails(sheetError)
+                );
+            }
 
             console.warn(
-                '👉 Send result uncertain. Check the chat before retrying.'
+                '👉 Check the WhatsApp chat before retrying this reply.'
             );
         }
     } finally {
@@ -275,7 +332,7 @@ async function executeReply(client, number, item) {
         if (pendingReplies.get(number) === item) {
             if (
                 !item.cancelled &&
-                item.revision !== revision &&
+                hasNewMessages() &&
                 item.messages.length > 0
             ) {
                 scheduleReply(client, number, item);
