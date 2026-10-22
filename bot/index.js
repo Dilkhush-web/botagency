@@ -61,12 +61,13 @@ let server = null;
 
 // Remove only Chromium's profile-root singleton entries.
 // Never recursively remove database/storage lock files.
-// Run only after all previous users of this profile are stopped.
+// Run automatically on startup to prevent Code: 21 errors.
 function removeAllLocksDeep(dir) {
     const allowedDir = path.resolve(sessionFolder);
 
     if (path.resolve(dir) !== allowedDir) {
-        throw new Error('Refusing cleanup outside the configured session.');
+        console.warn('⚠️ Refusing cleanup outside the configured session.');
+        return;
     }
 
     if (!fs.existsSync(dir)) {
@@ -85,28 +86,25 @@ function removeAllLocksDeep(dir) {
 
         try {
             // unlink also handles dangling symlinks.
-            // Do not use existsSync on individual lock symlinks.
             fs.unlinkSync(lockPath);
             console.log(`🗑️ Removed Chromium lock: ${name}`);
         } catch (err) {
             if (err.code !== 'ENOENT') {
-                throw err;
+                console.warn(`⚠️ Lock removal note for ${name}:`, err.message);
             }
         }
     }
 }
 
-// Explicit, one-time recovery.
-// Enable only when no other browser is using this profile.
+// Automatic lock removal on every startup (Fixed)
 function unlockBrowserProfile() {
-    if (process.env.RESET_CHROMIUM_LOCKS !== 'true') {
-        console.log('🔒 Automatic session lock removal is disabled.');
-        return;
+    console.log('🧹 Automatic Chromium session lock cleanup...');
+    try {
+        removeAllLocksDeep(sessionFolder);
+        console.log('✨ Chromium lock cleanup finished.');
+    } catch (err) {
+        console.warn('⚠️ Lock cleanup warning:', err.message);
     }
-
-    console.log('🧹 One-time Chromium session lock cleanup...');
-    removeAllLocksDeep(sessionFolder);
-    console.log('✨ Chromium lock cleanup finished.');
 }
 
 console.log(
@@ -194,7 +192,7 @@ async function startBot() {
 
         await connectDatabase();
 
-        // Only runs if RESET_CHROMIUM_LOCKS=true.
+        // Automatically clean Chromium profile locks on every boot
         unlockBrowserProfile();
 
         client = new Client({
@@ -365,8 +363,7 @@ async function startBot() {
             )
         ) {
             console.error(
-                '👉 Stop every other process using this session. ' +
-                'Then perform a one-time RESET_CHROMIUM_LOCKS=true startup.'
+                '👉 Stop every other process using this session.'
             );
         }
 
