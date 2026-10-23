@@ -241,11 +241,7 @@ async function executeReply(client, number, item) {
                 );
             }
         } catch (error) {
-            console.warn(
-                'ℹ️ Optional chat/typing step failed; ' +
-                'continuing to reply:',
-                errorDetails(error)
-            );
+            // Silently bypass optional chat/typing indicator errors
         } finally {
             if (
                 chat &&
@@ -254,10 +250,7 @@ async function executeReply(client, number, item) {
                 try {
                     await chat.clearState();
                 } catch (error) {
-                    console.warn(
-                        'ℹ️ Could not clear typing indicator:',
-                        error?.message || String(error)
-                    );
+                    // Ignore clear state errors silently
                 }
             }
         }
