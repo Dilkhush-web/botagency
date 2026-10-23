@@ -203,6 +203,7 @@ async function startBot() {
 
             puppeteer: {
                 headless: true,
+                protocolTimeout: 120000, // 👈 Yeh line add karni hai (2 minutes timeout)
 
                 executablePath:
                     process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
@@ -233,7 +234,6 @@ async function startBot() {
                 ]
             }
         });
-
         let pairingRequestInProgress = false;
         let authenticated = false;
         let isReadyInitialized = false;
